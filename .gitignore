@@ -1,0 +1,16 @@
+# Secrets – niemals ins Repository!
+.env
+secrets/*.txt
+secrets/*.env
+
+# Docker-Volumes (falls lokal gemountet)
+data/
+
+# Backup-Dateien
+backups/
+*.sql.gz
+
+# Editor
+.vscode/
+*.swp
+*~

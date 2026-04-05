@@ -1,0 +1,93 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # Bootstrap: Schreibt Secrets aus Env-Vars in Dateien (nur beim ersten Start).
+  # Nach dem ersten "docker compose up" kann die .env-Datei gelöscht werden.
+  # ---------------------------------------------------------------------------
+  bootstrap:
+    image: alpine:3.19
+    restart: "no"
+    volumes:
+      - ./secrets:/secrets
+    environment:
+      DB_NAME:            ${DB_NAME:-}
+      DB_ADMIN_USER:      ${DB_ADMIN_USER:-}
+      DB_ADMIN_PASSWORD:  ${DB_ADMIN_PASSWORD:-}
+      DB_WORKER_USER:     ${DB_WORKER_USER:-}
+      DB_WORKER_PASSWORD: ${DB_WORKER_PASSWORD:-}
+    command: >
+      sh -c '
+        set -e
+
+        write_secret() {
+          local name="$1"
+          local value="$2"
+          local path="/secrets/${name}.txt"
+
+          if [ -f "${path}" ]; then
+            echo "[bootstrap] ${name}.txt existiert bereits – übersprungen."
+          elif [ -z "${value}" ]; then
+            echo "[bootstrap] FEHLER: ${name} ist nicht gesetzt und keine Secret-Datei vorhanden!" >&2
+            exit 1
+          else
+            printf "%s" "${value}" > "${path}"
+            chmod 600 "${path}"
+            echo "[bootstrap] ${name}.txt geschrieben."
+          fi
+        }
+
+        write_secret db_name            "${DB_NAME}"
+        write_secret db_admin_user      "${DB_ADMIN_USER}"
+        write_secret db_admin_password  "${DB_ADMIN_PASSWORD}"
+        write_secret db_worker_user     "${DB_WORKER_USER}"
+        write_secret db_worker_password "${DB_WORKER_PASSWORD}"
+
+        echo "[bootstrap] Fertig."
+      '
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL – startet erst, nachdem Bootstrap erfolgreich war
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB_FILE:       /run/secrets/db_name
+      POSTGRES_USER_FILE:     /run/secrets/db_admin_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password
+    secrets:
+      - db_name
+      - db_admin_user
+      - db_admin_password
+      - db_worker_user
+      - db_worker_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Nur lokal erreichbar – n8n läuft auf demselben Host
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_admin_user) -d $(cat /run/secrets/db_name)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+secrets:
+  db_name:
+    file: ./secrets/db_name.txt
+  db_admin_user:
+    file: ./secrets/db_admin_user.txt
+  db_admin_password:
+    file: ./secrets/db_admin_password.txt
+  db_worker_user:
+    file: ./secrets/db_worker_user.txt
+  db_worker_password:
+    file: ./secrets/db_worker_password.txt
+
+volumes:
+  postgres_data:
