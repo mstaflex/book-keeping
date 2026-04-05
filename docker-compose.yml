@@ -1,52 +1,27 @@
 services:
 
   # ---------------------------------------------------------------------------
-  # Bootstrap: Schreibt Secrets aus Env-Vars in Dateien (nur beim ersten Start).
-  # Nach dem ersten "docker compose up" kann die .env-Datei gelöscht werden.
+  # Bootstrap: Writes secret files on first run.
+  # Env vars are optional – sane defaults and generated passwords are used
+  # if nothing is provided. Credentials are printed once to docker logs.
+  # After the first successful start, the .env file can be deleted.
   # ---------------------------------------------------------------------------
   bootstrap:
     image: alpine:3.19
     restart: "no"
     volumes:
       - ./secrets:/secrets
+      - ./bootstrap/entrypoint.sh:/entrypoint.sh:ro
     environment:
       DB_NAME:            ${DB_NAME:-}
       DB_ADMIN_USER:      ${DB_ADMIN_USER:-}
       DB_ADMIN_PASSWORD:  ${DB_ADMIN_PASSWORD:-}
       DB_WORKER_USER:     ${DB_WORKER_USER:-}
       DB_WORKER_PASSWORD: ${DB_WORKER_PASSWORD:-}
-    command: >
-      sh -c '
-        set -e
-
-        write_secret() {
-          local name="$1"
-          local value="$2"
-          local path="/secrets/${name}.txt"
-
-          if [ -f "${path}" ]; then
-            echo "[bootstrap] ${name}.txt existiert bereits – übersprungen."
-          elif [ -z "${value}" ]; then
-            echo "[bootstrap] FEHLER: ${name} ist nicht gesetzt und keine Secret-Datei vorhanden!" >&2
-            exit 1
-          else
-            printf "%s" "${value}" > "${path}"
-            chmod 600 "${path}"
-            echo "[bootstrap] ${name}.txt geschrieben."
-          fi
-        }
-
-        write_secret db_name            "${DB_NAME}"
-        write_secret db_admin_user      "${DB_ADMIN_USER}"
-        write_secret db_admin_password  "${DB_ADMIN_PASSWORD}"
-        write_secret db_worker_user     "${DB_WORKER_USER}"
-        write_secret db_worker_password "${DB_WORKER_PASSWORD}"
-
-        echo "[bootstrap] Fertig."
-      '
+    command: ["sh", "/entrypoint.sh"]
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL – startet erst, nachdem Bootstrap erfolgreich war
+  # PostgreSQL – starts only after bootstrap has completed successfully
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
@@ -68,7 +43,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
     ports:
-      # Nur lokal erreichbar – n8n läuft auf demselben Host
+      # Only reachable locally – n8n runs on the same host
       - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_admin_user) -d $(cat /run/secrets/db_name)"]
