@@ -52,7 +52,7 @@ write_secret() {
     fi
 
     printf '%s' "$value" > "$path"
-    chmod 600 "$path"
+    chmod 644 "$path"
     echo "[bootstrap] ${name}.txt written (source: ${source})."
 
     if [ "$source" != "env" ]; then
