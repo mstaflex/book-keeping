@@ -43,7 +43,7 @@
   #to.country
 ]
 
-#v(auto)
+#v(1fr)
 
 // ── Unterer Bereich: Carrier + Tracking ─────────────────────
 #line(length: 100%, stroke: 0.4pt + luma(200))

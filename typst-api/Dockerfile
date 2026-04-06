@@ -15,6 +15,12 @@ RUN curl -fsSL \
       "typst-x86_64-unknown-linux-musl/typst" \
     && typst --version
 
+# Pre-cache Typst Universe packages (invoice-pro + transitive deps).
+# Compilation may fail, but packages are downloaded during the import phase.
+RUN printf '#import "@preview/invoice-pro:0.1.1": invoice, item, invoice-line-items\n#set text(lang: "de")\n#show: invoice.with(sender:(name:"x",address:"x",city:"x"),recipient:(name:"x",address:"x",city:"x"),invoice-nr:"1",date:datetime.today())[]\n#invoice-line-items(item([Test],price:1.0,vat:0.0))' \
+      > /tmp/prefetch.typ && \
+    typst compile --font-path /usr/share/fonts /tmp/prefetch.typ /tmp/prefetch.pdf || true
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
