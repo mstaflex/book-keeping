@@ -8,18 +8,16 @@ services:
   # bootstrap skips all files automatically.
   # ---------------------------------------------------------------------------
   bootstrap:
-    image: alpine:3.19
+    build: ./bootstrap
     restart: "no"
     volumes:
       - secrets_data:/secrets
-      - ./bootstrap/entrypoint.sh:/entrypoint.sh:ro
     environment:
       DB_NAME:            ${DB_NAME:-}
       DB_ADMIN_USER:      ${DB_ADMIN_USER:-}
       DB_ADMIN_PASSWORD:  ${DB_ADMIN_PASSWORD:-}
       DB_WORKER_USER:     ${DB_WORKER_USER:-}
       DB_WORKER_PASSWORD: ${DB_WORKER_PASSWORD:-}
-    command: ["sh", "/entrypoint.sh"]
 
   # ---------------------------------------------------------------------------
   # PostgreSQL – starts only after bootstrap has completed successfully.
