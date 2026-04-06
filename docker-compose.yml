@@ -45,12 +45,11 @@ services:
       retries: 5
       start_period: 20s
     networks:
-      - postgres
+      - n8n-backend
 
 networks:
-  postgres:
-    driver: bridge
-    internal: true
+  n8n-backend:
+    external: true
 
 volumes:
   secrets_data:
