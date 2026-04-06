@@ -25,7 +25,7 @@ services:
   # so no placeholder files need to exist in the repository.
   # ---------------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
+    build: ./postgres
     restart: unless-stopped
     container_name: orderdb
     depends_on:
@@ -38,7 +38,6 @@ services:
     volumes:
       - secrets_data:/run/secrets:ro
       - postgres_data:/var/lib/postgresql/data
-      - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_admin_user.txt) -d $(cat /run/secrets/db_name.txt)"]
       interval: 10s
