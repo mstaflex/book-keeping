@@ -1,16 +1,17 @@
 services:
 
   # ---------------------------------------------------------------------------
-  # Bootstrap: Writes secret files on first run.
+  # Bootstrap: Writes secret files on first run into a named volume.
   # Env vars are optional – sane defaults and generated passwords are used
   # if nothing is provided. Credentials are printed once to docker logs.
-  # After the first successful start, the .env file can be deleted.
+  # On subsequent deploys the volume already contains real credentials and
+  # bootstrap skips all files automatically.
   # ---------------------------------------------------------------------------
   bootstrap:
     image: alpine:3.19
     restart: "no"
     volumes:
-      - ./secrets:/secrets
+      - secrets_data:/secrets
       - ./bootstrap/entrypoint.sh:/entrypoint.sh:ro
     environment:
       DB_NAME:            ${DB_NAME:-}
@@ -21,7 +22,9 @@ services:
     command: ["sh", "/entrypoint.sh"]
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL – starts only after bootstrap has completed successfully
+  # PostgreSQL – starts only after bootstrap has completed successfully.
+  # Secrets are read from the shared named volume, not from host files,
+  # so no placeholder files need to exist in the repository.
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
@@ -30,39 +33,23 @@ services:
       bootstrap:
         condition: service_completed_successfully
     environment:
-      POSTGRES_DB_FILE:       /run/secrets/db_name
-      POSTGRES_USER_FILE:     /run/secrets/db_admin_user
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password
-    secrets:
-      - db_name
-      - db_admin_user
-      - db_admin_password
-      - db_worker_user
-      - db_worker_password
+      POSTGRES_DB_FILE:       /run/secrets/db_name.txt
+      POSTGRES_USER_FILE:     /run/secrets/db_admin_user.txt
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password.txt
     volumes:
+      - secrets_data:/run/secrets:ro
       - postgres_data:/var/lib/postgresql/data
       - ./init:/docker-entrypoint-initdb.d:ro
     ports:
       # Only reachable locally – n8n runs on the same host
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_admin_user) -d $(cat /run/secrets/db_name)"]
+      test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_admin_user.txt) -d $(cat /run/secrets/db_name.txt)"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
 
-secrets:
-  db_name:
-    file: ./secrets/db_name.txt
-  db_admin_user:
-    file: ./secrets/db_admin_user.txt
-  db_admin_password:
-    file: ./secrets/db_admin_password.txt
-  db_worker_user:
-    file: ./secrets/db_worker_user.txt
-  db_worker_password:
-    file: ./secrets/db_worker_password.txt
-
 volumes:
+  secrets_data:
   postgres_data:

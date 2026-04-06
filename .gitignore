@@ -1,8 +1,7 @@
 # Secrets – never commit real credentials!
-# secrets/*.txt are tracked as PLACEHOLDER files so Docker bind-mounts resolve.
-# Bootstrap overwrites them with real values on first run.
+# Secrets are stored in a Docker named volume (secrets_data), not on the host.
 .env
-secrets/*.env
+secrets/
 
 # Docker-Volumes (falls lokal gemountet)
 data/

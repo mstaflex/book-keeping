@@ -5,10 +5,10 @@
 # =============================================================================
 set -euo pipefail
 
-WORKER_USER=$(cat /run/secrets/db_worker_user)
-WORKER_PASSWORD=$(cat /run/secrets/db_worker_password)
-DB_NAME=$(cat /run/secrets/db_name)
-ADMIN_USER=$(cat /run/secrets/db_admin_user)
+WORKER_USER=$(cat /run/secrets/db_worker_user.txt)
+WORKER_PASSWORD=$(cat /run/secrets/db_worker_password.txt)
+DB_NAME=$(cat /run/secrets/db_name.txt)
+ADMIN_USER=$(cat /run/secrets/db_admin_user.txt)
 
 echo ">>> Erstelle Worker-User '${WORKER_USER}' für Datenbank '${DB_NAME}' ..."
 
