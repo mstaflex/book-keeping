@@ -47,6 +47,20 @@ services:
     networks:
       - n8n-backend
 
+  # ---------------------------------------------------------------------------
+  # Typst PDF API – erzeugt Rechnungen, Lieferscheine, Versandetiketten.
+  # Erreichbar für n8n intern unter: http://typst-api:8080
+  # ---------------------------------------------------------------------------
+  typst-api:
+    build: ./typst-api
+    restart: unless-stopped
+    container_name: typst-api
+    networks:
+      - n8n-backend
+    # Nur für lokale Entwicklung / Tests von außen:
+    # ports:
+    #   - "8080:8080"
+
 networks:
   n8n-backend:
     external: true

@@ -1,0 +1,188 @@
+{
+  "name": "03 · Notion Sync (anonymisiert)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 1 }]
+        }
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000001",
+      "name": "Stündlich",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  order_id,\n  source,\n  order_date,\n  buyer_name,\n  buyer_email,\n  buyer_city,\n  buyer_zip,\n  buyer_country,\n  items_json,\n  subtotal,\n  shipping_cost,\n  total,\n  currency,\n  status,\n  tracking_number,\n  carrier,\n  invoice_number,\n  is_digital,\n  notion_page_id\nFROM orders\nWHERE updated_at > NOW() - INTERVAL '2 hours'\n  AND source = 'etsy'\nORDER BY updated_at DESC;",
+        "options": {}
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000002",
+      "name": "Geänderte Orders holen",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "has-rows",
+              "leftValue": "={{$input.all().length}}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000003",
+      "name": "Neue / geänderte Orders?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// PII-Anonymisierung für Notion (DSGVO-konform)\n// Was bleibt:    Pseudonym, Stadt, Land, PLZ-Präfix (erste 2 Stellen), Finanzen, Status\n// Was entfällt:  Vollname, E-Mail, Straße, vollständige PLZ\n\nconst crypto = require('crypto');\n\nfunction pseudonym(name, email) {\n  // Stabile Pseudonymisierung: SHA-256 der E-Mail (oder des Namens),\n  // ersten 8 Zeichen als Hex-Suffix → z.B. \"Kunde-3f7a2b1c\"\n  const seed = (email || name || String(Math.random())).toLowerCase().trim();\n  const hash = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 8);\n  return `Kunde-${hash}`;\n}\n\nreturn $input.all().map(item => {\n  const o = item.json;\n\n  // PLZ: nur erste 2 Zeichen (z.B. \"80\" statt \"80331\")\n  const zipPrefix = o.buyer_zip ? String(o.buyer_zip).slice(0, 2) + 'xxx' : null;\n\n  // Items: Titel + Menge behalten, Preise OK (keine PII)\n  let items = [];\n  try { items = JSON.parse(o.items_json ?? '[]'); } catch (e) {}\n  const itemsSummary = items.map(i => `${i.quantity}x ${i.title}`).join(', ');\n\n  return {\n    json: {\n      // Identifikatoren\n      order_id:       o.order_id,\n      notion_page_id: o.notion_page_id ?? null,\n      source:         o.source,\n      // Anonymisiert\n      pseudonym:      pseudonym(o.buyer_name, o.buyer_email),\n      city:           o.buyer_city ?? null,\n      zip_prefix:     zipPrefix,\n      country:        o.buyer_country ?? null,\n      // Geschäftsdaten (kein PII)\n      order_date:     o.order_date,\n      status:         o.status,\n      subtotal:       o.subtotal,\n      shipping_cost:  o.shipping_cost,\n      total:          o.total,\n      currency:       o.currency,\n      items_summary:  itemsSummary,\n      is_digital:     o.is_digital,\n      tracking_number: o.tracking_number ?? null,\n      carrier:        o.carrier ?? null,\n      invoice_number: o.invoice_number ?? null,\n    }\n  };\n});\n"
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000004",
+      "name": "Daten anonymisieren",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "has-page-id",
+              "leftValue": "={{$json.notion_page_id}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000005",
+      "name": "Schon in Notion?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "value": "={{$env.NOTION_DATABASE_ID}}", "mode": "id" },
+        "title": "={{$json.order_id}}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Quelle",         "type": "select",   "selectValue": "={{$json.source}}" },
+            { "key": "Status",         "type": "select",   "selectValue": "={{$json.status}}" },
+            { "key": "Bestelldatum",   "type": "date",     "dateValue": "={{$json.order_date}}" },
+            { "key": "Pseudonym",      "type": "richText", "textValue": "={{$json.pseudonym}}" },
+            { "key": "Stadt",          "type": "richText", "textValue": "={{$json.city ?? ''}}" },
+            { "key": "PLZ (Prefix)",   "type": "richText", "textValue": "={{$json.zip_prefix ?? ''}}" },
+            { "key": "Land",           "type": "richText", "textValue": "={{$json.country ?? ''}}" },
+            { "key": "Gesamt (€)",     "type": "number",   "numberValue": "={{$json.total}}" },
+            { "key": "Versand (€)",    "type": "number",   "numberValue": "={{$json.shipping_cost}}" },
+            { "key": "Währung",        "type": "select",   "selectValue": "={{$json.currency}}" },
+            { "key": "Artikel",        "type": "richText", "textValue": "={{$json.items_summary}}" },
+            { "key": "Digital",        "type": "checkbox", "checkboxValue": "={{$json.is_digital}}" },
+            { "key": "Rechnungsnr.",   "type": "richText", "textValue": "={{$json.invoice_number ?? ''}}" },
+            { "key": "Tracking",       "type": "richText", "textValue": "={{$json.tracking_number ?? ''}}" },
+            { "key": "Versanddienstl.","type": "richText", "textValue": "={{$json.carrier ?? ''}}" }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000006",
+      "name": "Notion Page erstellen",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1340, 140],
+      "credentials": {
+        "notionApi": { "id": "NOTION_CREDENTIAL_ID", "name": "Notion API" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": { "__rl": true, "value": "={{$json.notion_page_id}}", "mode": "id" },
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Status",         "type": "select",   "selectValue": "={{$json.status}}" },
+            { "key": "Tracking",       "type": "richText", "textValue": "={{$json.tracking_number ?? ''}}" },
+            { "key": "Versanddienstl.","type": "richText", "textValue": "={{$json.carrier ?? ''}}" },
+            { "key": "Rechnungsnr.",   "type": "richText", "textValue": "={{$json.invoice_number ?? ''}}" },
+            { "key": "Gesamt (€)",     "type": "number",   "numberValue": "={{$json.total}}" }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000007",
+      "name": "Notion Page aktualisieren",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1340, 300],
+      "credentials": {
+        "notionApi": { "id": "NOTION_CREDENTIAL_ID", "name": "Notion API" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE orders\nSET notion_page_id = '{{$json.id}}'\nWHERE order_id = '{{$('Daten anonymisieren').item.json.order_id}}'\n  AND notion_page_id IS NULL;",
+        "options": {}
+      },
+      "id": "c3d4e5f6-0003-0003-0003-000000000008",
+      "name": "notion_page_id zurückschreiben",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1560, 140],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    }
+  ],
+  "connections": {
+    "Stündlich": {
+      "main": [[{ "node": "Geänderte Orders holen", "type": "main", "index": 0 }]]
+    },
+    "Geänderte Orders holen": {
+      "main": [[{ "node": "Neue / geänderte Orders?", "type": "main", "index": 0 }]]
+    },
+    "Neue / geänderte Orders?": {
+      "main": [
+        [{ "node": "Daten anonymisieren", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Daten anonymisieren": {
+      "main": [[{ "node": "Schon in Notion?", "type": "main", "index": 0 }]]
+    },
+    "Schon in Notion?": {
+      "main": [
+        [{ "node": "Notion Page aktualisieren", "type": "main", "index": 0 }],
+        [{ "node": "Notion Page erstellen",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Notion Page erstellen": {
+      "main": [[{ "node": "notion_page_id zurückschreiben", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "c3d4e5f6-0003-0003-0003-000000000099",
+  "meta": {
+    "templateId": "notion-anonymized-sync-v1",
+    "instanceId": "buschi-bookkeeping"
+  },
+  "tags": [{ "name": "notion" }, { "name": "sync" }, { "name": "dsgvo" }]
+}

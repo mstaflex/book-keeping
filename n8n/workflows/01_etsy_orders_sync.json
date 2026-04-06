@@ -1,0 +1,129 @@
+{
+  "name": "01 · Etsy Orders Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 15 }]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Alle 15 Minuten",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(MAX(order_date), NOW() - INTERVAL '24 hours') AS last_sync FROM orders WHERE source = 'etsy';",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000002",
+      "name": "Letzten Sync-Zeitpunkt holen",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://openapi.etsy.com/v3/application/shops/{{$env.ETSY_SHOP_ID}}/receipts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "etsyOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "min_created", "value": "={{Math.floor(new Date($json.last_sync).getTime() / 1000)}}" },
+            { "name": "limit",       "value": "100" },
+            { "name": "was_paid",    "value": "true" }
+          ]
+        },
+        "options": { "response": { "response": { "fullResponse": false } } }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000003",
+      "name": "Etsy Receipts abrufen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "credentials": {
+        "etsyOAuth2Api": { "id": "ETSY_OAUTH2_CREDENTIAL_ID", "name": "Etsy OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "id": "check-results",
+              "leftValue": "={{$json.results?.length ?? 0}}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000004",
+      "name": "Neue Bestellungen?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Etsy Receipt → orders-Schema transformieren\nconst results = $input.item.json.results ?? [];\n\nreturn results.map(r => {\n  // Etsy speichert Geldbeträge als { amount, divisor, currency_code }\n  const money = (obj) => obj ? (obj.amount / obj.divisor) : null;\n\n  // Status-Mapping Etsy → internes Schema\n  const statusMap = {\n    'paid':      'paid',\n    'open':      'paid',\n    'completed': 'completed',\n    'shipped':   'shipped',\n    'canceled':  'cancelled',\n  };\n\n  // Items aus transactions extrahieren\n  const items = (r.transactions ?? []).map(t => ({\n    listing_id:  t.listing_id,\n    title:       t.title,\n    quantity:    t.quantity,\n    price:       money(t.price),\n    is_digital:  t.is_digital ?? false,\n  }));\n\n  const isDigital = items.every(i => i.is_digital);\n\n  return {\n    json: {\n      order_id:      String(r.receipt_id),\n      source:        'etsy',\n      order_date:    new Date(r.created_timestamp * 1000).toISOString(),\n      buyer_name:    r.name ?? null,\n      buyer_email:   r.buyer_email ?? null,\n      buyer_street:  r.first_line ?? null,\n      buyer_city:    r.city ?? null,\n      buyer_zip:     r.zip ?? null,\n      buyer_country: r.country_iso ?? null,\n      items_json:    JSON.stringify(items),\n      subtotal:      money(r.subtotal),\n      shipping_cost: money(r.total_shipping_cost),\n      total:         money(r.grandtotal),\n      currency:      r.currency_code ?? 'EUR',\n      status:        statusMap[r.status] ?? 'paid',\n      is_digital:    isDigital,\n    }\n  };\n});\n"
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000005",
+      "name": "Receipt → Order transformieren",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO orders (\n  order_id, source, order_date,\n  buyer_name, buyer_email,\n  buyer_street, buyer_city, buyer_zip, buyer_country,\n  items_json,\n  subtotal, shipping_cost, total, currency,\n  status, is_digital\n) VALUES (\n  '{{$json.order_id}}', '{{$json.source}}', '{{$json.order_date}}',\n  {{$json.buyer_name    ? `'${$json.buyer_name.replace(/'/g, \"''\")}'`    : 'NULL'}},\n  {{$json.buyer_email   ? `'${$json.buyer_email.replace(/'/g, \"''\")}'`   : 'NULL'}},\n  {{$json.buyer_street  ? `'${$json.buyer_street.replace(/'/g, \"''\")}'`  : 'NULL'}},\n  {{$json.buyer_city    ? `'${$json.buyer_city.replace(/'/g, \"''\")}'`    : 'NULL'}},\n  {{$json.buyer_zip     ? `'${$json.buyer_zip.replace(/'/g, \"''\")}'`     : 'NULL'}},\n  {{$json.buyer_country ? `'${$json.buyer_country.replace(/'/g, \"''\")}'` : 'NULL'}},\n  '{{$json.items_json}}'::jsonb,\n  {{$json.subtotal ?? 'NULL'}}, {{$json.shipping_cost ?? 'NULL'}},\n  {{$json.total ?? 'NULL'}}, '{{$json.currency}}',\n  '{{$json.status}}', {{$json.is_digital}}\n)\nON CONFLICT (order_id) DO UPDATE SET\n  status        = EXCLUDED.status,\n  items_json    = EXCLUDED.items_json,\n  subtotal      = EXCLUDED.subtotal,\n  shipping_cost = EXCLUDED.shipping_cost,\n  total         = EXCLUDED.total,\n  updated_at    = NOW()\nWHERE orders.status != 'completed';",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000006",
+      "name": "Order upsert in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1340, 220],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    }
+  ],
+  "connections": {
+    "Alle 15 Minuten": {
+      "main": [[{ "node": "Letzten Sync-Zeitpunkt holen", "type": "main", "index": 0 }]]
+    },
+    "Letzten Sync-Zeitpunkt holen": {
+      "main": [[{ "node": "Etsy Receipts abrufen", "type": "main", "index": 0 }]]
+    },
+    "Etsy Receipts abrufen": {
+      "main": [[{ "node": "Neue Bestellungen?", "type": "main", "index": 0 }]]
+    },
+    "Neue Bestellungen?": {
+      "main": [
+        [{ "node": "Receipt → Order transformieren", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Receipt → Order transformieren": {
+      "main": [[{ "node": "Order upsert in PostgreSQL", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "a1b2c3d4-0001-0001-0001-000000000099",
+  "meta": {
+    "templateId": "etsy-orders-sync-v1",
+    "instanceId": "buschi-bookkeeping"
+  },
+  "tags": [{ "name": "etsy" }, { "name": "orders" }, { "name": "sync" }]
+}

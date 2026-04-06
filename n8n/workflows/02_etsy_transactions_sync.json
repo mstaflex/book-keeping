@@ -1,0 +1,129 @@
+{
+  "name": "02 · Etsy Transactions Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 6 }]
+        }
+      },
+      "id": "b2c3d4e5-0002-0002-0002-000000000001",
+      "name": "Alle 6 Stunden",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COALESCE(MAX(date), NOW() - INTERVAL '90 days') AS last_sync,\n  EXTRACT(EPOCH FROM COALESCE(MAX(date), NOW() - INTERVAL '90 days'))::BIGINT AS last_sync_ts\nFROM etsy_transactions;",
+        "options": {}
+      },
+      "id": "b2c3d4e5-0002-0002-0002-000000000002",
+      "name": "Letzten TX-Zeitpunkt holen",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 300],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://openapi.etsy.com/v3/application/shops/{{$env.ETSY_SHOP_ID}}/payment-account/ledger-entries",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "etsyOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "min_created", "value": "={{$json.last_sync_ts}}" },
+            { "name": "max_created", "value": "={{Math.floor(Date.now() / 1000)}}" },
+            { "name": "limit",       "value": "100" },
+            { "name": "offset",      "value": "0" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2c3d4e5-0002-0002-0002-000000000003",
+      "name": "Etsy Ledger abrufen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "credentials": {
+        "etsyOAuth2Api": { "id": "ETSY_OAUTH2_CREDENTIAL_ID", "name": "Etsy OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "check-results",
+              "leftValue": "={{$json.results?.length ?? 0}}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ]
+        }
+      },
+      "id": "b2c3d4e5-0002-0002-0002-000000000004",
+      "name": "Neue Transaktionen?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Etsy Ledger-Entry → etsy_transactions-Schema\n// Doku: https://developers.etsy.com/documentation/reference#operation/getShopPaymentAccountLedgerEntries\n\nconst ENTRY_TYPE_MAP = {\n  'SALE':              'sale',\n  'TRANSACTION':       'sale',\n  'FEE':               'fee_transaction',\n  'LISTING_FEE':       'fee_listing',\n  'ADS_FEE':           'fee_ads',\n  'PROCESSING_FEE':    'fee_processing',\n  'REFUND':            'refund',\n  'TAX':               'tax',\n  'PAYOUT':            'payout',\n};\n\nconst results = $input.item.json.results ?? [];\n\nreturn results.map(entry => {\n  // Etsy gibt Beträge in Cents zurück (divisor = 100)\n  const toEur = (v, divisor = 100) => v != null ? (v / divisor) : null;\n\n  // Typ normalisieren (Fallback: fee_transaction)\n  const rawType = (entry.ledger_entry_type ?? '').toUpperCase();\n  const type    = ENTRY_TYPE_MAP[rawType] ?? 'fee_transaction';\n\n  const date    = new Date(entry.create_date * 1000).toISOString();\n  const month   = date.slice(0, 7); // '2026-04'\n\n  // Betrag: Etsy gibt positive/negative Werte in Cents\n  const amount    = toEur(entry.amount);\n  const feeAmount = toEur(entry.fee_gross);\n  const netAmount = amount != null && feeAmount != null\n    ? amount - Math.abs(feeAmount)\n    : amount;\n\n  return {\n    json: {\n      transaction_id: String(entry.entry_id),\n      order_id:       entry.reference_id ? String(entry.reference_id) : null,\n      type,\n      description:    entry.type ?? null,\n      amount,\n      fee_amount:     feeAmount,\n      net_amount:     netAmount,\n      currency:       entry.currency ?? 'EUR',\n      date,\n      month,\n    }\n  };\n});\n"
+      },
+      "id": "b2c3d4e5-0002-0002-0002-000000000005",
+      "name": "Ledger → Transaction transformieren",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO etsy_transactions (\n  transaction_id, order_id, type, description,\n  amount, fee_amount, net_amount,\n  currency, date, month\n) VALUES (\n  '{{$json.transaction_id}}',\n  {{$json.order_id ? `'${$json.order_id}'` : 'NULL'}},\n  '{{$json.type}}',\n  {{$json.description ? `'${$json.description.replace(/'/g, \"''\")}'` : 'NULL'}},\n  {{$json.amount    ?? 'NULL'}},\n  {{$json.fee_amount ?? 'NULL'}},\n  {{$json.net_amount ?? 'NULL'}},\n  '{{$json.currency}}',\n  '{{$json.date}}',\n  '{{$json.month}}'\n)\nON CONFLICT (transaction_id) DO NOTHING;",
+        "options": {}
+      },
+      "id": "b2c3d4e5-0002-0002-0002-000000000006",
+      "name": "Transaction upsert in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1340, 220],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    }
+  ],
+  "connections": {
+    "Alle 6 Stunden": {
+      "main": [[{ "node": "Letzten TX-Zeitpunkt holen", "type": "main", "index": 0 }]]
+    },
+    "Letzten TX-Zeitpunkt holen": {
+      "main": [[{ "node": "Etsy Ledger abrufen", "type": "main", "index": 0 }]]
+    },
+    "Etsy Ledger abrufen": {
+      "main": [[{ "node": "Neue Transaktionen?", "type": "main", "index": 0 }]]
+    },
+    "Neue Transaktionen?": {
+      "main": [
+        [{ "node": "Ledger → Transaction transformieren", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Ledger → Transaction transformieren": {
+      "main": [[{ "node": "Transaction upsert in PostgreSQL", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "b2c3d4e5-0002-0002-0002-000000000099",
+  "meta": {
+    "templateId": "etsy-transactions-sync-v1",
+    "instanceId": "buschi-bookkeeping"
+  },
+  "tags": [{ "name": "etsy" }, { "name": "transactions" }, { "name": "sync" }]
+}
