@@ -1,151 +1,143 @@
 // ============================================================
 //  Lieferschein · DIN A4 · DIN-5008-B
-//  Angelehnt an @preview/invoice-pro
-//  https://github.com/leonieziechmann/invoice-pro
+//  Gleicher Stil wie invoice.typ
 // ============================================================
 #let d = json("data.json")
 #let s = d.seller
 #let b = d.buyer
 
+// ── Seite ────────────────────────────────────────────────
 #set page(
   paper:  "a4",
-  margin: (top: 20mm, bottom: 20mm, left: 25mm, right: 20mm),
+  margin: (top: 20mm, bottom: 22mm, left: 25mm, right: 20mm),
 )
 #set text(font: "Liberation Sans", size: 10pt, lang: "de")
 #set par(leading: 0.55em)
 
-#let accent = rgb("#16a34a")
-
-// ── Kopfzeile ────────────────────────────────────────────
-#grid(
-  columns: (1fr, auto),
-  gutter: 1em,
-  align(left + top)[
-    #text(size: 18pt, weight: "bold", fill: accent)[
+// ── Kopfzeile: feste Höhe, Logo per place() positioniert ──
+#block(width: 100%, height: 30mm)[
+  #place(top + left)[
+    #text(size: 17pt, weight: "bold")[
       #if s.business_name != none { s.business_name } else { s.name }
     ]
+    #if s.tagline != none [
+      \ #text(size: 8.5pt, fill: luma(120))[#s.tagline]
+    ]
+  ]
+  #place(top + right)[
+    #text(size: 8pt, fill: luma(80))[
+      *#(if s.business_name != none { s.business_name } else { s.name })* \
+      #if s.street  != none { s.street  + linebreak() }
+      #if s.zip     != none { s.zip + " " }#if s.city != none { s.city + linebreak() }
+      #if s.email   != none { s.email   + linebreak() }
+      #if s.phone   != none { s.phone   + linebreak() }
+      #if s.website != none { s.website }
+    ]
+  ]
+  #if d.logo != none {
+    place(top + center, dy - 15pt, image(d.logo, height: 40mm))
+  }
+]
+
+#v(2mm)
+// #line(length: 100%, stroke: 0.4pt + luma(180))
+#v(5mm)
+
+// ── Miniabsender + Adressfenster (DIN-5008-B) ────────────
+#text(size: 7pt, fill: luma(150))[
+  #(if s.business_name != none { s.business_name } else { s.name }) ·
+  #if s.street != none { s.street } ·
+  #if s.zip    != none { s.zip }#if s.city != none { " " + s.city }
+]
+#v(1mm)
+#text(size: 10pt)[
+  *#b.name* \
+  #if b.street  != none { b.street  + linebreak() }
+  #if b.zip     != none { b.zip + " " }#if b.city    != none { b.city    + linebreak() }
+  #if b.country != none { b.country }
+]
+
+// ── Betreff + Datum ───────────────────────────────────────
+#v(8mm)
+#grid(
+  columns: (1fr, auto),
+  align(left)[
+    #text(size: 13pt, weight: "bold")[Lieferschein #d.delivery_number]
+    #if d.order_id != none [
+      #v(1pt)
+      #text(size: 9pt, fill: luma(110))[Bestellung: #d.order_id]
+    ]
   ],
-  align(right, text(size: 8.5pt, fill: luma(80))[
-    #s.name \
-    #if s.street != none { s.street + linebreak() }
-    #if s.zip != none { s.zip } #if s.city != none { " " + s.city }
-    #if s.email != none { linebreak() + s.email }
-    #if s.phone != none { linebreak() + s.phone }
+  align(right + bottom, text(size: 9pt, fill: luma(90))[
+    #if s.city != none { s.city + ", " }#d.date
   ]),
 )
-#v(2mm)
-#line(length: 100%, stroke: 0.5pt + accent)
-#v(8mm)
+#v(4mm)
 
-// ── Adressfenster DIN-5008-B + Info-Box rechts ───────────
-#grid(
-  columns: (85mm, 1fr),
-  gutter: 1em,
-  [
-    #text(size: 7pt, fill: luma(120))[
-      #if s.business_name != none { s.business_name } else { s.name } ·
-      #if s.street != none { s.street } ·
-      #if s.zip != none { s.zip } #if s.city != none { s.city }
-    ]
-    #v(2mm)
-    #text(size: 10pt)[
-      *#b.name* \
-      #if b.street  != none { b.street  + linebreak() }
-      #if b.zip     != none { b.zip }
-      #if b.city    != none { " " + b.city + linebreak() }
-      #if b.country != none { b.country }
-    ]
-  ],
-  align(right)[
-    #text(size: 14pt, weight: "bold")[LIEFERSCHEIN]
-    #v(0.4em)
-    #set text(size: 9pt)
-    #grid(
-      columns: (auto, auto),
-      gutter: (0.6em, 0.3em),
-      align(right, text(fill: luma(100))[Lieferschein-Nr.:]),
-      align(left)[*#d.delivery_number*],
-      align(right, text(fill: luma(100))[Datum:]),
-      align(left)[#d.date],
-      ..if d.order_id != none {(
-        align(right, text(fill: luma(100))[Bestellung:]),
-        align(left, text(fill: luma(80))[#d.order_id]),
-      )} else { () },
-    )
-  ],
-)
-
-#v(10mm)
-
-// ── Artikeltabelle ───────────────────────────────────────
-#set table(
-  stroke: none,
-  inset:  (x: 6pt, y: 5pt),
-  fill:   (_, row) => if row == 0 { accent } else if calc.odd(row) { luma(248) } else { white },
-)
-#set table.header(repeat: true)
+// ── Tabelle (1-basierte Positionsnummern) ─────────────────
+#set table(stroke: none, inset: (x: 5pt, y: 3pt))
 
 #table(
   columns: (2em, 1fr, 5em),
-  table.header(
-    table.cell(text(fill: white, weight: "bold")[Pos.]),
-    table.cell(text(fill: white, weight: "bold")[Artikel]),
-    table.cell(align: center, text(fill: white, weight: "bold")[Menge]),
-  ),
-  ..d.items.map(i => (
-    table.cell(align: center)[#i.pos],
+  table.hline(stroke: 0.5pt + luma(100)),
+  table.cell(align: center, text(weight: "bold", size: 9pt)[Pos.]),
+  table.cell(               text(weight: "bold", size: 9pt)[Artikel]),
+  table.cell(align: center, text(weight: "bold", size: 9pt)[Menge]),
+  table.hline(stroke: 0.5pt + luma(100)),
+  ..d.items.enumerate().map(((idx, i)) => (
+    table.cell(align: center)[#(idx + 1)],
     table.cell[#i.description],
     table.cell(align: center)[#i.quantity],
+    table.hline(stroke: 0.3pt + luma(215)),
   )).flatten(),
 )
 
 // ── Versandinfo ──────────────────────────────────────────
 #if d.tracking_number != none or d.carrier != none [
-  #v(1.5em)
-  #box(fill: luma(245), inset: 10pt, radius: 4pt, width: 100%)[
-    #grid(
-      columns: (auto, 1fr),
-      gutter: (0.8em, 0.4em),
-      ..{
-        let rows = ()
-        if d.carrier != none {
-          rows = rows + (text(fill: luma(80))[*Versanddienstleister:*], [#d.carrier])
-        }
-        if d.tracking_number != none {
-          rows = rows + (text(fill: luma(80))[*Sendungsnummer:*], text(font: "Liberation Mono")[#d.tracking_number])
-        }
-        rows
-      }
-    )
+  #v(1em)
+  #block(fill: luma(247), inset: (x: 10pt, y: 8pt), radius: 3pt, width: 100%)[
+    #set text(size: 9pt)
+    #if d.carrier != none [*Versanddienstleister:* #d.carrier \ ]
+    #if d.tracking_number != none [
+      *Sendungsnummer:* #text(font: "Liberation Mono")[#d.tracking_number]
+    ]
+  ]
+]
+
+// ── Persönlicher Gruß ─────────────────────────────────────
+#if d.note != none [
+  #v(1em)
+  #block(stroke: 0.4pt + luma(200), inset: (x: 10pt, y: 8pt), radius: 3pt, width: 100%)[
+    #text(size: 9.5pt)[#d.note]
   ]
 ]
 
 #v(2em)
 
 // ── Unterschrift ─────────────────────────────────────────
-#grid(
-  columns: (1fr, 1fr),
-  gutter: 2em,
-  [
-    #line(length: 80%, stroke: 0.5pt)
-    #text(size: 8pt, fill: luma(120))[Datum / Unterschrift Absender]
-  ],
-  [
-    #line(length: 80%, stroke: 0.5pt)
-    #text(size: 8pt, fill: luma(120))[Datum / Unterschrift Empfänger (optional)]
-  ],
-)
+// #grid(
+//   columns: (1fr, 1fr),
+//   gutter: 2em,
+//   [
+//     #line(length: 80%, stroke: 0.4pt + luma(160))
+//     #v(2pt)
+//     #text(size: 8pt, fill: luma(140))[Datum / Unterschrift Absender]
+//   ],
+//   [
+//     #line(length: 80%, stroke: 0.4pt + luma(160))
+//     #v(2pt)
+//     #text(size: 8pt, fill: luma(140))[Datum / Unterschrift Empfänger (optional)]
+//   ],
+// )
 
 // ── Fußzeile ─────────────────────────────────────────────
 #place(bottom + center)[
-  #line(length: 100%, stroke: 0.5pt + luma(200))
-  #v(4pt)
-  #text(size: 8pt, fill: luma(120))[
-    #if s.business_name != none { s.business_name + " · " }
-    #s.name
-    #if s.street != none { " · " + s.street }
-    #if s.zip != none { " · " + s.zip }
-    #if s.city != none { " " + s.city }
-    #if s.email != none { " · " + s.email }
+  #line(length: 100%, stroke: 0.4pt + luma(190))
+  #v(3pt)
+  #text(size: 7.5pt, fill: luma(150))[
+    #(if s.business_name != none { s.business_name + " · " } else { "" }
+    )#s.name#if s.street != none { " · " + s.street
+    }#if s.zip != none { " · " + s.zip }#if s.city != none { " " + s.city
+    }#if s.email != none { " · " + s.email }#if s.website != none { " · " + s.website }
   ]
 ]

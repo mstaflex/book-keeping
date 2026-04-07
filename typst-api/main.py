@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+ASSETS_DIR    = Path(__file__).parent / "assets"
 TYPST_BIN     = shutil.which("typst") or "typst"
 
 app = FastAPI(title="Typst PDF API", version="1.0.0")
@@ -38,6 +39,7 @@ class Address(BaseModel):
 
 class Seller(Address):
     business_name: Optional[str] = None
+    tagline:       Optional[str] = None          # z.B. "Schöne Dinge aus Berlin"
     email:         Optional[str] = None
     phone:         Optional[str] = None
     website:       Optional[str] = None
@@ -54,6 +56,7 @@ class LineItem(BaseModel):
     quantity:    float
     unit_price:  float
     total:       float
+    vat_rate:    float = 0.0                     # z.B. 0.19 für 19% MwSt
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +75,7 @@ class InvoiceRequest(BaseModel):
     total:          float
     currency:       str = "EUR"
     payment_note:   str = "Bereits bezahlt via Etsy Payments"
+    note:           Optional[str] = None         # persönlicher Gruß / Hinweis
 
 
 class DeliveryNoteRequest(BaseModel):
@@ -83,6 +87,7 @@ class DeliveryNoteRequest(BaseModel):
     items:           list[LineItem]
     tracking_number: Optional[str] = None
     carrier:         Optional[str] = None
+    note:            Optional[str] = None        # persönlicher Gruß / Hinweis
 
 
 class ShippingLabelRequest(BaseModel):
@@ -109,6 +114,14 @@ def compile_pdf(template_name: str, data: dict) -> bytes:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
+
+        # Logo kopieren falls vorhanden, Pfad in data eintragen
+        logo_src = next(ASSETS_DIR.glob("logo.*"), None) if ASSETS_DIR.exists() else None
+        if logo_src:
+            shutil.copy(logo_src, tmp / logo_src.name)
+            data = {**data, "logo": logo_src.name}
+        else:
+            data = {**data, "logo": None}
 
         # Daten als JSON schreiben
         (tmp / "data.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
