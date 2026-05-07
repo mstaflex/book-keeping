@@ -80,6 +80,14 @@ CREATE INDEX idx_etsy_tx_synced          ON etsy_transactions (lexoffice_synced)
 CREATE INDEX idx_etsy_tx_order_id        ON etsy_transactions (order_id);
 
 -- ---------------------------------------------------------------------------
+-- etsy_config  (Key-Value-Store für API-Credentials)
+-- ---------------------------------------------------------------------------
+CREATE TABLE etsy_config (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------------
 -- invoice_counter
 -- ---------------------------------------------------------------------------
 CREATE TABLE invoice_counter (

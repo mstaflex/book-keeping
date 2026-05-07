@@ -16,11 +16,11 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT COALESCE(MAX(order_date), NOW() - INTERVAL '24 hours') AS last_sync FROM orders WHERE source = 'etsy';",
+        "query": "SELECT\n  (SELECT value FROM etsy_config WHERE key = 'etsy_api_key')  AS api_key,\n  (SELECT value FROM etsy_config WHERE key = 'etsy_shop_id') AS shop_id,\n  COALESCE(MAX(o.order_date), NOW() - INTERVAL '24 hours')   AS last_sync\nFROM orders o\nWHERE o.source = 'etsy';",
         "options": {}
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000002",
-      "name": "Letzten Sync-Zeitpunkt holen",
+      "name": "Config + letzten Sync holen",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [460, 300],
@@ -30,9 +30,15 @@
     },
     {
       "parameters": {
-        "url": "=https://openapi.etsy.com/v3/application/shops/{{$env.ETSY_SHOP_ID}}/receipts",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "etsyOAuth2Api",
+        "url": "=https://openapi.etsy.com/v3/application/shops/{{$json.shop_id}}/receipts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$json.api_key}}" }
+          ]
+        },
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -49,7 +55,7 @@
       "typeVersion": 4.2,
       "position": [680, 300],
       "credentials": {
-        "etsyOAuth2Api": { "id": "ETSY_OAUTH2_CREDENTIAL_ID", "name": "Etsy OAuth2" }
+        "oAuth2Api": { "id": "ETSY_OAUTH2_CREDENTIAL_ID", "name": "Etsy OAuth2" }
       }
     },
     {
@@ -111,9 +117,9 @@
   ],
   "connections": {
     "Alle 15 Minuten": {
-      "main": [[{ "node": "Letzten Sync-Zeitpunkt holen", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Config + letzten Sync holen", "type": "main", "index": 0 }]]
     },
-    "Letzten Sync-Zeitpunkt holen": {
+    "Config + letzten Sync holen": {
       "main": [[{ "node": "Etsy Receipts abrufen", "type": "main", "index": 0 }]]
     },
     "Etsy Receipts abrufen": {

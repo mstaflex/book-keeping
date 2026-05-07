@@ -16,11 +16,11 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  COALESCE(MAX(date), NOW() - INTERVAL '90 days') AS last_sync,\n  EXTRACT(EPOCH FROM COALESCE(MAX(date), NOW() - INTERVAL '90 days'))::BIGINT AS last_sync_ts\nFROM etsy_transactions;",
+        "query": "SELECT\n  (SELECT value FROM etsy_config WHERE key = 'etsy_api_key')  AS api_key,\n  (SELECT value FROM etsy_config WHERE key = 'etsy_shop_id') AS shop_id,\n  COALESCE(MAX(t.date), NOW() - INTERVAL '90 days')          AS last_sync,\n  EXTRACT(EPOCH FROM COALESCE(MAX(t.date), NOW() - INTERVAL '90 days'))::BIGINT AS last_sync_ts\nFROM etsy_transactions t;",
         "options": {}
       },
       "id": "b2c3d4e5-0002-0002-0002-000000000002",
-      "name": "Letzten TX-Zeitpunkt holen",
+      "name": "Config + letzten TX-Zeitpunkt holen",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [460, 300],
@@ -30,9 +30,15 @@
     },
     {
       "parameters": {
-        "url": "=https://openapi.etsy.com/v3/application/shops/{{$env.ETSY_SHOP_ID}}/payment-account/ledger-entries",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "etsyOAuth2Api",
+        "url": "=https://openapi.etsy.com/v3/application/shops/{{$json.shop_id}}/payment-account/ledger-entries",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{$json.api_key}}" }
+          ]
+        },
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -50,7 +56,7 @@
       "typeVersion": 4.2,
       "position": [680, 300],
       "credentials": {
-        "etsyOAuth2Api": { "id": "ETSY_OAUTH2_CREDENTIAL_ID", "name": "Etsy OAuth2" }
+        "oAuth2Api": { "id": "ETSY_OAUTH2_CREDENTIAL_ID", "name": "Etsy OAuth2" }
       }
     },
     {
@@ -100,9 +106,9 @@
   ],
   "connections": {
     "Alle 6 Stunden": {
-      "main": [[{ "node": "Letzten TX-Zeitpunkt holen", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Config + letzten TX-Zeitpunkt holen", "type": "main", "index": 0 }]]
     },
-    "Letzten TX-Zeitpunkt holen": {
+    "Config + letzten TX-Zeitpunkt holen": {
       "main": [[{ "node": "Etsy Ledger abrufen", "type": "main", "index": 0 }]]
     },
     "Etsy Ledger abrufen": {
