@@ -16,7 +16,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  (SELECT value FROM etsy_config WHERE key = 'etsy_api_key')  AS api_key,\n  (SELECT value FROM etsy_config WHERE key = 'etsy_shop_id') AS shop_id,\n  COALESCE(MAX(t.date), NOW() - INTERVAL '90 days')          AS last_sync,\n  EXTRACT(EPOCH FROM COALESCE(MAX(t.date), NOW() - INTERVAL '90 days'))::BIGINT AS last_sync_ts\nFROM etsy_transactions t;",
+        "query": "SELECT\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'api_key')  AS api_key,\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'shop_id') AS shop_id,\n  COALESCE(MAX(t.date), NOW() - INTERVAL '90 days')                       AS last_sync,\n  EXTRACT(EPOCH FROM COALESCE(MAX(t.date), NOW() - INTERVAL '90 days'))::BIGINT AS last_sync_ts\nFROM etsy_transactions t;",
         "options": {}
       },
       "id": "b2c3d4e5-0002-0002-0002-000000000002",

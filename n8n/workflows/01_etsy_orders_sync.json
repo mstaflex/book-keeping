@@ -16,7 +16,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  (SELECT value FROM etsy_config WHERE key = 'etsy_api_key')  AS api_key,\n  (SELECT value FROM etsy_config WHERE key = 'etsy_shop_id') AS shop_id,\n  COALESCE(MAX(o.order_date), NOW() - INTERVAL '24 hours')   AS last_sync\nFROM orders o\nWHERE o.source = 'etsy';",
+        "query": "SELECT\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'api_key')  AS api_key,\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'shop_id') AS shop_id,\n  COALESCE(MAX(o.order_date), NOW() - INTERVAL '24 hours')                AS last_sync\nFROM orders o\nWHERE o.source = 'etsy';",
         "options": {}
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000002",

@@ -69,20 +69,19 @@ Dann auf **Connect** klicken und bei Etsy autorisieren. Die Redirect-URI in der 
 
 Die Credential-ID analog zu Postgres in den Workflow-JSONs als `ETSY_OAUTH2_CREDENTIAL_ID` eintragen, oder nach Import ueber die UI zuweisen.
 
-### 5. Etsy-Konfiguration in die Datenbank schreiben
+### 5. App-Konfiguration in die Datenbank schreiben
 
-Die Workflows lesen API-Key und Shop-ID aus der `etsy_config`-Tabelle:
+Alle API-Keys und externen IDs liegen in der zentralen `app_config`-Tabelle (`scope`, `key`, `value`), nicht in `.env`:
 
 ```sql
-INSERT INTO etsy_config (key, value) VALUES
-  ('etsy_api_key', 'deinKeystring:deinSharedSecret'),
-  ('etsy_shop_id', 'deineShopId')
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+INSERT INTO app_config (scope, key, value) VALUES
+  ('etsy',   'api_key',     'deinKeystring:deinSharedSecret'),
+  ('etsy',   'shop_id',     'deineShopId'),
+  ('notion', 'database_id', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
 ```
 
-Der `x-api-key`-Wert muss im Format `keystring:shared_secret` vorliegen (Etsy-Anforderung seit Februar 2026).
-
-Die Shop-ID findest du im Etsy Shop Manager in der URL (`shop_id=...`) oder ueber die API unter `GET /v3/application/users/me`.
+Der Etsy `api_key` muss im Format `keystring:shared_secret` vorliegen (Etsy-Anforderung seit Februar 2026). Die Shop-ID findest du im Etsy Shop Manager in der URL (`shop_id=...`) oder ueber die API unter `GET /v3/application/users/me`. Die Notion `database_id` steht in der Notion-URL: `notion.so/<workspace>/<DATABASE_ID>?v=...`.
 
 ### 6. Workflows importieren
 
