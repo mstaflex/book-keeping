@@ -118,13 +118,14 @@
         "resource": "databasePage",
         "operation": "update",
         "pageId": { "__rl": true, "value": "={{$json.notion_page_id}}", "mode": "id" },
+        "simple": false,
         "propertiesUi": {
           "propertyValues": [
-            { "key": "Status",         "type": "select",   "selectValue": "={{$json.status}}" },
-            { "key": "Tracking",       "type": "richText", "textValue": "={{$json.tracking_number ?? ''}}" },
-            { "key": "Versanddienstl.","type": "richText", "textValue": "={{$json.carrier ?? ''}}" },
-            { "key": "Rechnungsnr.",   "type": "richText", "textValue": "={{$json.invoice_number ?? ''}}" },
-            { "key": "Gesamt (€)",     "type": "number",   "numberValue": "={{$json.total}}" }
+            { "key": "Status|select",          "type": "select", "selectValue": "={{$json.status}}" },
+            { "key": "Tracking|rich_text",     "textContent": "={{ $json.tracking_number || '' }}" },
+            { "key": "Versanddienstl.|rich_text", "textContent": "={{ $json.carrier || '' }}" },
+            { "key": "Rechnungsnr.|rich_text", "textContent": "={{ $json.invoice_number || '' }}" },
+            { "key": "Gesamt|number",          "numberValue": "={{ parseFloat($json.total) || 0 }}" }
           ]
         }
       },
