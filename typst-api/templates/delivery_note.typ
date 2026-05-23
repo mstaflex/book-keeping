@@ -35,7 +35,7 @@
     ]
   ]
   #if d.logo != none {
-    place(top + center, dy - 15pt, image(d.logo, height: 40mm))
+    place(top + center, dy: -15pt, image(d.logo, height: 40mm))
   }
 ]
 

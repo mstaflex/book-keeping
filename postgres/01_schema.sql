@@ -62,7 +62,10 @@ CREATE TABLE etsy_transactions (
     order_id         TEXT,
     type             TEXT NOT NULL CHECK (type IN (
                          'sale', 'fee_transaction', 'fee_listing',
-                         'fee_ads', 'fee_processing', 'refund', 'tax', 'payout'
+                         'fee_ads', 'fee_processing', 'refund',
+                         'tax',              -- eigene Steuern (Rechnungen, manuell)
+                         'marketplace_tax',  -- von Etsy als 'deemed supplier' einbehalten/abgeführt
+                         'payout'
                      )),
     description      TEXT,
     amount           NUMERIC(10,2),
