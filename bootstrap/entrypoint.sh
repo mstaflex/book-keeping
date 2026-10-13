@@ -89,8 +89,10 @@ if [ -n "$GENERATED" ]; then
     done
     echo "|                                                                 |"
     echo "|  n8n connection string:                                         |"
+    # Host = container_name im Docker-Netzwerk n8n-backend (127.0.0.1 wäre
+    # aus Sicht des n8n-Containers der n8n-Container selbst)
     printf "|  postgresql://%-50s|\n" \
-        "$(cat "${SECRETS_DIR}/db_worker_user.txt"):$(cat "${SECRETS_DIR}/db_worker_password.txt")@127.0.0.1:5432/$(cat "${SECRETS_DIR}/db_name.txt")"
+        "$(cat "${SECRETS_DIR}/db_worker_user.txt"):$(cat "${SECRETS_DIR}/db_worker_password.txt")@orderdb:5432/$(cat "${SECRETS_DIR}/db_name.txt")"
     echo "+-----------------------------------------------------------------+"
     echo ""
 fi

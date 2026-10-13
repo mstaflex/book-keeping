@@ -83,6 +83,28 @@ ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
 
 Der Etsy `api_key` muss im Format `keystring:shared_secret` vorliegen (Etsy-Anforderung seit Februar 2026). Die Shop-ID findest du im Etsy Shop Manager in der URL (`shop_id=...`) oder ueber die API unter `GET /v3/application/users/me`. Die Notion `database_id` steht in der Notion-URL: `notion.so/<workspace>/<DATABASE_ID>?v=...`.
 
+Die Verkaeuferdaten fuer Rechnung und Lieferschein liegen ebenfalls in `app_config` (Scope `seller`). Pflicht sind `name`, `street`, `zip`, `city` – fehlen sie, bricht Workflow 04 mit einer klaren Fehlermeldung ab, statt eine Rechnung mit Platzhaltern zu erzeugen:
+
+```sql
+INSERT INTO app_config (scope, key, value) VALUES
+  ('seller', 'name',             'Vorname Nachname'),
+  ('seller', 'business_name',    'Mein Shop'),
+  ('seller', 'street',           'Strasse 1'),
+  ('seller', 'zip',              '12345'),
+  ('seller', 'city',             'Stadt'),
+  ('seller', 'country',          'Deutschland'),
+  ('seller', 'email',            'shop@example.de'),
+  ('seller', 'iban',             'DE.. .... .... .... .... ..'),
+  ('seller', 'bank_name',        'Bank'),
+  ('seller', 'tax_id',           '123/456/78901'),   -- Steuernummer
+  ('seller', 'kleinunternehmer', 'true')             -- §19 UStG; 'false' = mit MwSt
+ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
+```
+
+Optional: `tagline`, `phone`, `website`, `vat_id` (USt-IdNr., wird nur gedruckt, wenn gesetzt).
+
+Den Schluessel `('etsy', 'receipts_cursor')` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung) – nicht manuell setzen.
+
 ### 6. Workflows importieren
 
 Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
@@ -96,6 +118,29 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 
 Nach dem Import die Postgres- und OAuth2-Credentials in jedem Workflow zuweisen und die Workflows aktivieren.
 
+> **Sicherheit:** Der Webhook von Workflow 04 (`POST /webhook/generate-docs`, Body `{"order_id": "..."}`) hat keine Authentifizierung. Ist n8n aus dem Internet erreichbar, kann jeder Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. In der Webhook-Node unter **Authentication** am besten *Header Auth* aktivieren und den Header beim Aufrufer mitsenden.
+
+## Updates einspielen
+
+Nach einem `git pull` auf dem Server:
+
+1. **typst-api neu bauen** – die Templates werden ins Image kopiert, ein reines `docker compose up -d` laeuft weiter mit dem alten Stand:
+
+   ```bash
+   docker compose up -d --build typst-api
+   docker exec typst-api curl -s localhost:8080/health   # templates_sha zeigt den laufenden Template-Stand
+   ```
+
+2. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume. Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
+
+   ```bash
+   for f in postgres/migrations/*.sql; do
+     docker exec -i orderdb sh -c 'psql -v ON_ERROR_STOP=1 -U "$(cat /run/secrets/db_admin_user.txt)" -d "$(cat /run/secrets/db_name.txt)"' < "$f"
+   done
+   ```
+
+3. **Workflows neu importieren** und Credentials wieder zuweisen (siehe oben).
+
 ## typst-api
 
 REST-API zur Generierung von PDF-Dokumenten. Endpoints:
@@ -104,6 +149,6 @@ REST-API zur Generierung von PDF-Dokumenten. Endpoints:
 - `POST /delivery-note` – Lieferschein (DIN A4)
 - `POST /shipping-label` – Versandetikett (DIN A6)
 
-Die Rechnungs- und Lieferschein-Templates basieren auf **[invoice-pro](https://github.com/leonieziechmann/invoice-pro)** von Leonie Ziechmann (MIT-Lizenz). Das Rechnungstemplate nutzt das Paket direkt (`@preview/invoice-pro:0.1.1`); der Lieferschein ist im gleichen visuellen Stil gehalten.
+Die Rechnungs- und Lieferschein-Templates sind von **[invoice-pro](https://github.com/leonieziechmann/invoice-pro)** von Leonie Ziechmann (MIT-Lizenz) inspiriert und im gleichen visuellen Stil gehalten; sie importieren das Paket nicht, sondern sind eigenstaendige Typst-Dateien.
 
 Die API ist intern unter `http://typst-api:8080` erreichbar. Swagger-Doku: `http://typst-api:8080/docs`.
