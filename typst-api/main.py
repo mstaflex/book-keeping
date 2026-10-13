@@ -6,8 +6,8 @@ Gibt jeweils application/pdf zurück – direkt in n8n als Binary nutzbar.
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -21,6 +21,13 @@ from pydantic import BaseModel
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 ASSETS_DIR    = Path(__file__).parent / "assets"
 TYPST_BIN     = shutil.which("typst") or "typst"
+
+# Fingerabdruck der eingebauten Templates. Templates werden ins Image kopiert –
+# nach Änderungen muss neu gebaut werden (docker compose up -d --build typst-api).
+# Über GET /health lässt sich so prüfen, welcher Stand tatsächlich läuft.
+TEMPLATES_SHA = hashlib.sha256(
+    b"".join(p.name.encode() + p.read_bytes() for p in sorted(TEMPLATES_DIR.glob("*.typ")))
+).hexdigest()[:12]
 
 app = FastAPI(title="Typst PDF API", version="1.0.0")
 
@@ -46,7 +53,8 @@ class Seller(Address):
     iban:          Optional[str] = None
     bank_name:     Optional[str] = None
     # Steuer
-    tax_id:        Optional[str] = None          # USt-IdNr oder Steuernummer
+    tax_id:        Optional[str] = None          # Steuernummer (z.B. "123/456/78901")
+    vat_id:        Optional[str] = None          # USt-IdNr (z.B. "DE123456789"), falls vorhanden
     kleinunternehmer: bool = True                # §19 UStG → keine MwSt
 
 
@@ -70,8 +78,9 @@ class InvoiceRequest(BaseModel):
     seller:         Seller
     buyer:          Address
     items:          list[LineItem]
-    subtotal:       float
+    subtotal:       float                        # Warenwert nach Rabatt, ohne Versand
     shipping_cost:  float
+    discount:       float = 0.0                  # Rabatt (Gutschein), positiv angeben
     total:          float
     currency:       str = "EUR"
     payment_note:   str = "Bereits bezahlt via Etsy Payments"
@@ -167,7 +176,7 @@ def pdf_response(pdf_bytes: bytes, filename: str) -> Response:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "typst": TYPST_BIN}
+    return {"status": "ok", "typst": TYPST_BIN, "templates_sha": TEMPLATES_SHA}
 
 
 @app.post("/invoice", summary="Rechnung als PDF")

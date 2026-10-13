@@ -84,7 +84,9 @@
   ],
   align(right + bottom, text(size: 9pt, fill: luma(90))[
     #if s.city != none { s.city + ", " }#d.invoice_date
-    #if s.tax_id != none [ \ USt-IdNr. #s.tax_id ]
+    // Steuernummer ≠ USt-IdNr. – nicht falsch beschriften (§14 UStG).
+    // Kleinunternehmer: Steuernummer steht im §19-Hinweis unten.
+    #if s.vat_id != none [ \ USt-IdNr. #s.vat_id ] else if s.tax_id != none and not s.kleinunternehmer [ \ Steuernr. #s.tax_id ]
   ]),
 )
 #v(4mm)
@@ -92,7 +94,10 @@
 // ── Tabelle ───────────────────────────────────────────────
 #let show-vat = (not s.kleinunternehmer) and d.items.any(i => i.vat_rate > 0)
 #let ship-vat = if s.kleinunternehmer { 0.0 } else { 0.19 }
-#let cols = if show-vat { (2.5em, 1fr, 4.5em, 5em, 3em, 5em) } else { (2em, 1fr, 3.5em, 5em, 5em) }
+// Zahlenspalten "auto": feste em-Breiten waren schmaler als die fetten
+// Überschriften ("Einzelpreis" lief in "Menge" hinein).
+#let cols = if show-vat { (auto, 1fr, auto, auto, auto, auto) } else { (auto, 1fr, auto, auto, auto) }
+#let discount = d.at("discount", default: 0.0)
 
 // Tabellenzeilen aufbauen (1-basierte Positionsnummern)
 #let shipping-row = if d.shipping_cost > 0 {(
@@ -102,6 +107,16 @@
   table.cell(align: right)[#eur(d.shipping_cost)],
   ..if show-vat { (table.cell(align: center, text(size: 9pt, fill: luma(110))[#pct(ship-vat)]),) } else { () },
   table.cell(align: right)[#eur(d.shipping_cost)],
+)} else { () }
+
+// Rabatt (z.B. Etsy-Gutschein): ohne diese Zeile ergaben die Positionen
+// mehr als die Zwischensumme und die Rechnung ging rechnerisch nicht auf.
+#let discount-row = if discount > 0 {(
+  table.cell(align: center)[–],
+  table.cell[Rabatt],
+  [], [],
+  ..if show-vat { ([],) } else { () },
+  table.cell(align: right)[#eur(-discount)],
 )} else { () }
 
 #set table(stroke: none, inset: (x: 5pt, y: 3pt))
@@ -127,18 +142,23 @@
     table.cell(align: right)[#eur(i.total)],
     table.hline(stroke: 0.3pt + luma(215)),
   )).flatten(),
+  ..discount-row,
+  ..if discount > 0 { (table.hline(stroke: 0.3pt + luma(215)),) } else { () },
   ..shipping-row,
   ..if d.shipping_cost > 0 { (table.hline(stroke: 0.3pt + luma(215)),) } else { () },
 )
 
 // ── MwSt-Gruppen & Gesamtbetrag ──────────────────────────
+// Rabatt mindert die Bemessungsgrundlage anteilig je Position
+#let items-sum   = d.items.fold(0.0, (a, i) => a + i.total)
+#let disc-factor = if items-sum > 0 { (items-sum - discount) / items-sum } else { 1.0 }
 #let vat-groups = {
   let g = (:)
   if not s.kleinunternehmer {
     for i in d.items {
       if i.vat_rate > 0 {
         let k = pct(i.vat_rate)
-        g.insert(k, g.at(k, default: 0.0) + i.total * i.vat_rate)
+        g.insert(k, g.at(k, default: 0.0) + i.total * disc-factor * i.vat_rate)
       }
     }
     if d.shipping_cost > 0 and ship-vat > 0 {
@@ -160,7 +180,8 @@
       columns: (1fr, 5.5em), column-gutter: 6mm,
       text(fill: luma(90))[#label], align(right)[#amount],
     )
-    #sum-row([Nettosumme:], eur(d.subtotal))
+    // "Netto" suggeriert bei §19 UStG, dass noch Steuer hinzukäme.
+    #sum-row(if s.kleinunternehmer [Zwischensumme:] else [Nettosumme:], eur(d.subtotal))
     #if d.shipping_cost > 0 { v(2pt); sum-row([Versandkosten:], eur(d.shipping_cost)) }
     #for p in vat-groups.pairs() { v(2pt); sum-row([#p.at(0) Mehrwertsteuer:], eur(p.at(1))) }
     #v(4pt)
