@@ -101,7 +101,23 @@ INSERT INTO app_config (scope, key, value) VALUES
 ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
 ```
 
-Optional: `tagline`, `phone`, `website`, `vat_id` (USt-IdNr., wird nur gedruckt, wenn gesetzt).
+Optional: `tagline`, `phone`, `website`, `vat_id` (USt-IdNr., wird nur gedruckt, wenn gesetzt; Pflicht fuer die Reverse-Charge-Rechnungen an Etsy, siehe unten).
+
+Fuer die monatliche Reverse-Charge-Rechnung an Etsy (Workflow 05) zusaetzlich Empfaenger und Startdatum (Scope `etsy_rc`):
+
+```sql
+INSERT INTO app_config (scope, key, value) VALUES
+  ('seller',  'vat_id',            'DE123456789'),   -- eigene USt-IdNr. (Pflicht bei Reverse Charge)
+  ('etsy_rc', 'recipient_name',    'Etsy Ireland UC'),
+  ('etsy_rc', 'recipient_street',  'One Le Pole Square, Ship Street Great'),
+  ('etsy_rc', 'recipient_city',    'Dublin 8'),
+  ('etsy_rc', 'recipient_country', 'Irland'),
+  ('etsy_rc', 'recipient_vat_id',  'IE9777587C'),
+  ('etsy_rc', 'start_date',        '2026-10-01')     -- ab hier automatisch abrechnen
+ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
+```
+
+Empfaengeranschrift und USt-IdNr. bitte mit deinen bisherigen Rechnungen an Etsy bzw. einer Etsy-Gebuehrenrechnung abgleichen. `start_date` ist der erste Tag, ab dem Workflow 05 abrechnet: alles davor hast du bereits selbst an Etsy fakturiert und darf nicht doppelt auf eine Rechnung. Optional: `recipient_zip`, `payment_note` (Zahlungsstatus-Zeile) und `note` (Erlaeuterungstext auf der Rechnung).
 
 Den Schluessel `('etsy', 'receipts_cursor')` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung) – nicht manuell setzen.
 
@@ -114,11 +130,26 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 | `01_etsy_orders_sync.json` | Synchronisiert Etsy-Bestellungen alle 15 Minuten |
 | `02_etsy_transactions_sync.json` | Synchronisiert Etsy-Transaktionen (Gebuehren, Auszahlungen) alle 6 Stunden |
 | `03_notion_sync.json` | Synchronisiert Bestellungen nach Notion |
-| `04_generate_invoice_pdf.json` | Erzeugt Rechnungen und Lieferscheine als PDF |
+| `04_generate_invoice_pdf.json` | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel) |
+| `05_etsy_reverse_charge_invoice.json` | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
 
 Nach dem Import die Postgres- und OAuth2-Credentials in jedem Workflow zuweisen und die Workflows aktivieren.
 
 > **Sicherheit:** Der Webhook von Workflow 04 (`POST /webhook/generate-docs`, Body `{"order_id": "..."}`) hat keine Authentifizierung. Ist n8n aus dem Internet erreichbar, kann jeder Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. In der Webhook-Node unter **Authentication** am besten *Header Auth* aktivieren und den Header beim Aufrufer mitsenden.
+
+## Digitale Verkaeufe: Reverse-Charge-Rechnung an Etsy (Workflow 05)
+
+Bei digitalen Artikeln gilt Etsy gegenueber dem Kaeufer als Verkaeufer (Art. 9a MwSt-DVO), erhebt die VAT und fuehrt sie selbst ab. Der Shop verkauft die Leistung an Etsy Ireland und stellt dafuer eine Reverse-Charge-Rechnung ohne USt. Workflow 05 erzeugt diese Rechnung einmal im Monat:
+
+- **Wann:** am 1. jedes Monats um 6 Uhr (Europe/Berlin) fuer den Vormonat. Manuell per `POST /webhook/etsy-rc-invoice` mit Body `{"month": "2026-09"}`, ohne `month` gilt der Vormonat. Laufende oder kuenftige Monate werden abgelehnt.
+- **Welche Bestellungen:** alle nicht stornierten Etsy-Bestellungen mit mindestens einem digitalen Artikel, die noch auf keiner Etsy-Rechnung stehen, Bestelldatum (deutsche Zeit) ab `start_date` bis Monatsende. Verspaetet synchronisierte Bestellungen aus Vormonaten landen dadurch automatisch auf der naechsten Rechnung; der Leistungszeitraum beginnt dann beim aeltesten Verkauf.
+- **Betrag je Bestellung:** der Verkaufspreis ohne die von Etsy erhobene VAT. Etsys `subtotal` (Artikel nach Gutschein, ohne VAT und Versand) entspricht genau Brutto minus VAT. Bei gemischten Bestellungen zaehlt nur der digitale Anteil, der Gutschein wird anteilig verteilt. Die physischen Artikel derselben Bestellung rechnet Workflow 04 identisch ab, zusammen ergibt das wieder den `subtotal`.
+- **Ergebnis:** Rechnung im gemeinsamen Nummernkreis (`invoice_counter`), gespeichert in `etsy_rc_invoices` mit eingefrorenen Positionen, Verkaeufer- und Empfaengerdaten. Die Bestellungen werden in `orders.etsy_rc_invoice_number` markiert. Das PDF geht per E-Mail raus, mit Abgleichwerten fuer das Etsy-Zahlungskonto (gezahlt inkl. VAT, davon VAT).
+- **Erneut ausfuehren** (z.B. nach einem Mail- oder PDF-Fehler) erzeugt keine neue Rechnung: Der Monat liefert dieselbe Rechnung mit derselben Nummer und demselben Inhalt aus dem Snapshot. Monate ohne digitale Verkaeufe erzeugen keine Rechnung und verbrauchen keine Nummer.
+
+Rein digitale Bestellungen bekommen deshalb keine Kundenrechnung mehr (Workflow 04 lehnt sie ab, ohne eine Nummer zu vergeben), gemischte nur ueber die physischen Artikel.
+
+Nicht automatisiert: Wird ein digitaler Verkauf **nach** Rechnungsstellung erstattet, ist eine Korrektur der Etsy-Rechnung (Gutschrift/Storno) manuell noetig. Teilerstattungen mindern den abgerechneten Betrag nicht.
 
 ## Updates einspielen
 

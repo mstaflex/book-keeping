@@ -41,6 +41,7 @@ CREATE TABLE orders (
     is_digital       BOOLEAN DEFAULT FALSE,
     lexoffice_id     TEXT,
     notion_page_id   TEXT,
+    etsy_rc_invoice_number TEXT,    -- Reverse-Charge-Rechnung an Etsy, die die digitalen Artikel enthält
     created_at       TIMESTAMPTZ DEFAULT NOW(),
     updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
@@ -52,6 +53,7 @@ CREATE TRIGGER trg_orders_updated_at
 CREATE INDEX idx_orders_status      ON orders (status);
 CREATE INDEX idx_orders_source      ON orders (source);
 CREATE INDEX idx_orders_order_date  ON orders (order_date DESC);
+CREATE INDEX idx_orders_etsy_rc     ON orders (etsy_rc_invoice_number);
 
 -- ---------------------------------------------------------------------------
 -- etsy_transactions
@@ -91,6 +93,33 @@ CREATE TABLE app_config (
     key    TEXT NOT NULL,
     value  TEXT NOT NULL,
     PRIMARY KEY (scope, key)
+);
+
+-- ---------------------------------------------------------------------------
+-- etsy_rc_invoices  (monatliche Reverse-Charge-Rechnungen an Etsy über die
+--                    digitalen Verkäufe; Etsy ist dort Plattform/Leistungs-
+--                    empfänger und führt die VAT selbst ab)
+-- Positionen, Verkäufer und Empfänger werden beim Anlegen eingefroren:
+-- ein erneuter PDF-Druck liefert exakt dieselbe Rechnung (GoBD).
+-- ---------------------------------------------------------------------------
+CREATE TABLE etsy_rc_invoices (
+    id               SERIAL PRIMARY KEY,
+    period           DATE NOT NULL UNIQUE,      -- erster Tag des abgerechneten Monats
+    invoice_number   TEXT NOT NULL UNIQUE,      -- aus invoice_counter (gemeinsamer Nummernkreis)
+    invoice_date     DATE NOT NULL,
+    service_from     DATE NOT NULL,             -- Leistungszeitraum
+    service_to       DATE NOT NULL,
+    order_count      INTEGER NOT NULL,
+    net_total        NUMERIC(12,2) NOT NULL,    -- Rechnungsbetrag (ohne VAT)
+    gross_total      NUMERIC(12,2),             -- nur Abgleich: von Käufern gezahlt inkl. VAT
+    marketplace_tax  NUMERIC(12,2),             -- nur Abgleich: von Etsy einbehaltene VAT/Steuer
+    currency         TEXT NOT NULL DEFAULT 'EUR',
+    lines_json       JSONB NOT NULL,
+    seller_json      JSONB NOT NULL,
+    recipient_json   JSONB NOT NULL,
+    payment_note     TEXT,
+    note             TEXT,                      -- Erläuterung auf der Rechnung
+    created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ---------------------------------------------------------------------------
