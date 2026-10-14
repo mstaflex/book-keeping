@@ -26,14 +26,24 @@ of the deployment" instead of naming the provider).
 
 | Value | Location (never the repo) |
 |---|---|
-| API keys, shop/database IDs, seller data, mail sender/recipient, Etsy invoice recipient | `app_config` table (scopes `etsy`, `notion`, `seller`, `mail`, `etsy_rc`) |
+| API keys, shop/database IDs, seller data, mail sender/recipient, Etsy invoice recipient | Environment variables of the Compose project (hosting panel or server-side `.env`); the `config` service writes them into the `app_config` table on every start |
 | OAuth / Notion / SMTP / Postgres logins | n8n credential store |
 | DB passwords | `secrets_data` Docker volume (written by `bootstrap/`) |
-| Optional bootstrap overrides | `.env` (gitignored) |
+| Optional bootstrap overrides (`DB_*`, first start only) | `.env` (gitignored) |
+| Database contents | external Docker volumes `bookkeeping_pgdata`, `bookkeeping_secrets` |
 
-When adding a feature that needs a new instance-specific value, read it from
-`app_config` and fail with a clear error if it is missing. Do not hard-code it
-in a workflow, template or script, not even "temporarily".
+When adding a feature that needs a new instance-specific value: add the
+variable to the `config` service in `docker-compose.yml` (prefix `ETSY_`,
+`ETSY_RC_`, `NOTION_`, `MAIL_` or `SELLER_`; a new scope needs a new prefix in
+`config-loader/apply-config.sh`), document it in README step 5 and in
+`.env.example` (placeholder value only), read it from `app_config` in the
+workflow and fail with a clear error if it is missing. Do not hard-code it in a
+workflow, template or script, not even "temporarily". The config loader must
+never log values, only keys.
+
+Keep the volumes `external` with fixed names: Compose must never create or
+delete them (no `down -v`, project deletion or project rename may touch the
+data).
 
 ## 3. Placeholders in code and docs
 

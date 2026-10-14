@@ -8,6 +8,7 @@ Automatisierte Buchhaltung und Dokumentenerstellung für kleine Unternehmen, bet
 |---|---|
 | `bootstrap/` | Initialisiert Secrets (DB-Credentials) beim ersten Start |
 | `postgres/` | PostgreSQL mit Schema für Bestellungen, Transaktionen, Rechnungen |
+| `config-loader/` | Schreibt die Konfiguration aus Umgebungsvariablen bei jedem Start nach `app_config` |
 | `typst-api/` | FastAPI-Service zur PDF-Generierung via [Typst](https://typst.app) |
 | `n8n/workflows/` | n8n-Workflow-JSONs (Etsy-Sync, Notion-Sync, Rechnungserstellung) |
 
@@ -25,11 +26,17 @@ Automatisierte Buchhaltung und Dokumentenerstellung für kleine Unternehmen, bet
 docker network create n8n-backend
 ```
 
-### 2. Infrastruktur starten
+### 2. Volumes anlegen und Infrastruktur starten
+
+Datenbank und DB-Passwoerter liegen in zwei Docker-Volumes mit festen Namen. Sie werden **einmalig von Hand** angelegt (z.B. per SSH auf dem Server). Compose legt sie bewusst nicht selbst an und loescht sie nie: weder `docker compose down -v` noch das Loeschen des Projekts im Hosting-Panel noch ein anderer Projektname beruehren die Daten.
 
 ```bash
+docker volume create bookkeeping_pgdata
+docker volume create bookkeeping_secrets
 docker compose up -d
 ```
+
+Fehlt ein Volume, bricht der Start mit `external volume "bookkeeping_..." not found` ab, statt still mit einer leeren Datenbank zu starten. Absichtlich loeschen laesst sich die Datenbank nur mit `docker volume rm bookkeeping_pgdata`.
 
 Beim ersten Start erzeugt der `bootstrap`-Container automatisch DB-Credentials und gibt sie einmalig in den Docker-Logs aus:
 
@@ -115,59 +122,38 @@ Workflow 03 schreibt in eine Notion-Datenbank mit genau diesen Properties (Name 
 
 Die Integration aus 3.3 mit der Datenbank verbinden (**••• > Connections**). Die Datenbank-ID kommt nach `app_config` (Schritt 5).
 
-### 5. App-Konfiguration in die Datenbank schreiben
+### 5. App-Konfiguration hinterlegen
 
-Alle API-Keys und externen IDs liegen in der zentralen `app_config`-Tabelle (`scope`, `key`, `value`), nicht in `.env`:
+Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeuferdaten, Mail-Adressen, Empfaenger der Etsy-Rechnung) aus der Tabelle `app_config`. Gepflegt werden sie als **Umgebungsvariablen des Compose-Projekts**: im Hosting-Panel oder in einer `.env` neben der `docker-compose.yml` (Vorlage: `.env.example`, die `.env` selbst nie committen). Der Container `app-config` schreibt sie bei jedem Start in die Datenbank.
 
-```sql
-INSERT INTO app_config (scope, key, value) VALUES
-  ('etsy',   'api_key',     'deinKeystring:deinSharedSecret'),
-  ('etsy',   'shop_id',     'deineShopId'),
-  ('notion', 'database_id', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'),
-  ('mail',   'from',        'rechnungen@example.org'),   -- Absender der PDF-Mails (04, 05)
-  ('mail',   'to',          'buchhaltung@example.org')   -- Empfaenger der PDF-Mails
-ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
-```
+- Die Variablen koennen auch erst nach dem ersten Start eingetragen werden. Leere oder fehlende Variablen werden uebersprungen, der Wert in der Datenbank bleibt dann unveraendert.
+- **Nach jeder Aenderung `docker compose up -d` ausfuehren** (im Panel: „Redeploy“/„Update“). Erst dabei wird der Container mit den neuen Werten neu erstellt. Ein `docker compose restart` uebernimmt geaenderte Variablen **nicht**; das ist Docker-Verhalten, kein Fehler.
+- Bei jedem Start, auch nach einem Server-Neustart, werden die Werte erneut geschrieben. Was als Variable gesetzt ist, gewinnt also gegen Aenderungen von Hand in der Datenbank.
+- Kontrolle: `docker logs app-config` zeigt, welche Schluessel uebernommen bzw. geaendert wurden und welche Pflichtwerte noch fehlen. Die Werte selbst werden nie geloggt.
 
-Der Etsy `api_key` muss im Format `keystring:shared_secret` vorliegen (Etsy-Anforderung seit Februar 2026). Die Shop-ID findest du im Etsy Shop Manager in der URL (`shop_id=...`) oder ueber die API unter `GET /v3/application/users/me`. Die Notion `database_id` steht in der Notion-URL: `notion.so/<workspace>/<DATABASE_ID>?v=...`.
+| Variable | `app_config` | Hinweis |
+|---|---|---|
+| `ETSY_API_KEY` | `etsy.api_key` | Format `keystring:shared_secret` |
+| `ETSY_SHOP_ID` | `etsy.shop_id` | |
+| `NOTION_DATABASE_ID` | `notion.database_id` | |
+| `MAIL_FROM`, `MAIL_TO` | `mail.from`, `mail.to` | Absender/Empfaenger der PDF-Mails (Workflows 04, 05) |
+| `SELLER_NAME`, `SELLER_STREET`, `SELLER_ZIP`, `SELLER_CITY` | `seller.*` | Pflicht fuer Rechnungen |
+| `SELLER_BUSINESS_NAME`, `SELLER_TAGLINE`, `SELLER_COUNTRY`, `SELLER_EMAIL`, `SELLER_PHONE`, `SELLER_WEBSITE`, `SELLER_IBAN`, `SELLER_BANK_NAME` | `seller.*` | optional |
+| `SELLER_TAX_ID` | `seller.tax_id` | Steuernummer |
+| `SELLER_VAT_ID` | `seller.vat_id` | USt-IdNr., wird nur gedruckt, wenn gesetzt; Pflicht fuer Workflow 05 |
+| `SELLER_KLEINUNTERNEHMER` | `seller.kleinunternehmer` | `true` (Standard, §19 UStG) oder `false` |
+| `ETSY_RC_RECIPIENT_NAME`, `_STREET`, `_ZIP`, `_CITY`, `_COUNTRY`, `_VAT_ID` | `etsy_rc.recipient_*` | Empfaenger der Reverse-Charge-Rechnung (Workflow 05), `_ZIP` optional |
+| `ETSY_RC_START_DATE` | `etsy_rc.start_date` | erster Tag, ab dem Workflow 05 abrechnet (`YYYY-MM-DD`) |
+| `ETSY_RC_PAYMENT_NOTE`, `ETSY_RC_NOTE` | `etsy_rc.payment_note`, `etsy_rc.note` | optionale Texte auf der Etsy-Rechnung |
 
-Die Verkaeuferdaten fuer Rechnung und Lieferschein liegen ebenfalls in `app_config` (Scope `seller`). Pflicht sind `name`, `street`, `zip`, `city` – fehlen sie, bricht Workflow 04 mit einer klaren Fehlermeldung ab, statt eine Rechnung mit Platzhaltern zu erzeugen:
+Zu den Werten:
 
-```sql
-INSERT INTO app_config (scope, key, value) VALUES
-  ('seller', 'name',             'Vorname Nachname'),
-  ('seller', 'business_name',    'Mein Shop'),
-  ('seller', 'street',           'Strasse 1'),
-  ('seller', 'zip',              '12345'),
-  ('seller', 'city',             'Stadt'),
-  ('seller', 'country',          'Deutschland'),
-  ('seller', 'email',            'shop@example.org'),
-  ('seller', 'iban',             'DE.. .... .... .... .... ..'),
-  ('seller', 'bank_name',        'Bank'),
-  ('seller', 'tax_id',           '123/456/78901'),   -- Steuernummer
-  ('seller', 'kleinunternehmer', 'true')             -- §19 UStG; 'false' = mit MwSt
-ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
-```
+- Der Etsy `api_key` muss im Format `keystring:shared_secret` vorliegen (Etsy-Anforderung seit Februar 2026). Die Shop-ID findest du im Etsy Shop Manager in der URL (`shop_id=...`) oder ueber die API unter `GET /v3/application/users/me`. Die Notion `database_id` steht in der Notion-URL: `notion.so/<workspace>/<DATABASE_ID>?v=...`.
+- Fehlen Pflichtwerte, brechen die Workflows mit einer klaren Fehlermeldung ab, statt Rechnungen mit Platzhaltern zu erzeugen.
+- Empfaenger der Etsy-Rechnung, z.B. `ETSY_RC_RECIPIENT_NAME=Etsy Ireland UC`, `ETSY_RC_RECIPIENT_STREET=One Le Pole Square, Ship Street Great`, `ETSY_RC_RECIPIENT_CITY=Dublin 8`, `ETSY_RC_RECIPIENT_COUNTRY=Irland`, `ETSY_RC_RECIPIENT_VAT_ID=IE9777587C`. Anschrift und USt-IdNr. bitte mit deinen bisherigen Rechnungen an Etsy bzw. einer Etsy-Gebuehrenrechnung abgleichen.
+- `ETSY_RC_START_DATE`: alles davor hast du bereits selbst an Etsy fakturiert; es darf nicht doppelt auf eine Rechnung.
 
-Optional: `tagline`, `phone`, `website`, `vat_id` (USt-IdNr., wird nur gedruckt, wenn gesetzt; Pflicht fuer die Reverse-Charge-Rechnungen an Etsy, siehe unten).
-
-Fuer die monatliche Reverse-Charge-Rechnung an Etsy (Workflow 05) zusaetzlich Empfaenger und Startdatum (Scope `etsy_rc`):
-
-```sql
-INSERT INTO app_config (scope, key, value) VALUES
-  ('seller',  'vat_id',            'DE123456789'),   -- eigene USt-IdNr. (Pflicht bei Reverse Charge)
-  ('etsy_rc', 'recipient_name',    'Etsy Ireland UC'),
-  ('etsy_rc', 'recipient_street',  'One Le Pole Square, Ship Street Great'),
-  ('etsy_rc', 'recipient_city',    'Dublin 8'),
-  ('etsy_rc', 'recipient_country', 'Irland'),
-  ('etsy_rc', 'recipient_vat_id',  'IE9777587C'),
-  ('etsy_rc', 'start_date',        '2026-10-01')     -- ab hier automatisch abrechnen
-ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value;
-```
-
-Empfaengeranschrift und USt-IdNr. bitte mit deinen bisherigen Rechnungen an Etsy bzw. einer Etsy-Gebuehrenrechnung abgleichen. `start_date` ist der erste Tag, ab dem Workflow 05 abrechnet: alles davor hast du bereits selbst an Etsy fakturiert und darf nicht doppelt auf eine Rechnung. Optional: `recipient_zip`, `payment_note` (Zahlungsstatus-Zeile) und `note` (Erlaeuterungstext auf der Rechnung).
-
-Den Schluessel `('etsy', 'receipts_cursor')` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung) – nicht manuell setzen.
+Werte lassen sich weiterhin auch per SQL oder Adminer in `app_config` eintragen. Sie werden nur dann ueberschrieben, wenn dieselbe Variable gesetzt ist. Den Schluessel `etsy.receipts_cursor` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung); er ist bewusst keine Variable.
 
 ### 6. Workflows importieren
 
@@ -223,7 +209,7 @@ Dann im Browser `http://localhost:8081` oeffnen und anmelden:
 | **Benutzer / Passwort** | Worker-User aus den Bootstrap-Logs; den Admin-User nur fuer Schemaaenderungen |
 | **Datenbank** | DB-Name aus den Bootstrap-Logs (Standard `orderdb`) |
 
-Vorsicht bei Aenderungen von Hand: `invoice_counter`, `orders.invoice_number`, `orders.etsy_rc_invoice_number` und `etsy_rc_invoices` bilden den lueckenlosen Nummernkreis und die unveraenderlichen Rechnungs-Snapshots. Dort nichts loeschen oder umnummerieren. Lesen und `app_config` pflegen ist unproblematisch.
+Vorsicht bei Aenderungen von Hand: `invoice_counter`, `orders.invoice_number`, `orders.etsy_rc_invoice_number` und `etsy_rc_invoices` bilden den lueckenlosen Nummernkreis und die unveraenderlichen Rechnungs-Snapshots. Dort nichts loeschen oder umnummerieren. Lesen ist unproblematisch; Konfigurationswerte besser ueber die Umgebungsvariablen pflegen (Schritt 5), sonst ueberschreibt der naechste Start sie wieder.
 
 Den Port nie auf `0.0.0.0` umstellen oder ueber einen oeffentlichen Reverse-Proxy freigeben: Das waere eine Anmeldeseite zur Buchhaltungs-DB direkt im Internet. Unterstuetzt ein Deploy-Werkzeug keine Compose-Profile, startet Adminer mit dem Stack, bleibt aber auf `127.0.0.1` begrenzt; dann bei Nichtgebrauch stoppen.
 
@@ -231,14 +217,24 @@ Den Port nie auf `0.0.0.0` umstellen oder ueber einen oeffentlichen Reverse-Prox
 
 Nach einem `git pull` auf dem Server:
 
-1. **typst-api neu bauen** – die Templates werden ins Image kopiert, ein reines `docker compose up -d` laeuft weiter mit dem alten Stand:
+1. **Einmalig fuer Installationen von vor den festen Volumes:** Die alten Volumes heissen `<projektname>_postgres_data` und `<projektname>_secrets_data` (`docker volume ls`). Vor dem ersten Start mit der neuen `docker-compose.yml` die Daten in die festen Volumes kopieren, sonst startet die neue Version mit leerer Datenbank:
+
+   ```bash
+   docker compose down
+   docker volume create bookkeeping_pgdata
+   docker volume create bookkeeping_secrets
+   docker run --rm -v <projektname>_postgres_data:/from:ro -v bookkeeping_pgdata:/to  alpine cp -a /from/. /to/
+   docker run --rm -v <projektname>_secrets_data:/from:ro  -v bookkeeping_secrets:/to alpine cp -a /from/. /to/
+   ```
+
+2. **typst-api neu bauen** – die Templates werden ins Image kopiert, ein reines `docker compose up -d` laeuft weiter mit dem alten Stand:
 
    ```bash
    docker compose up -d --build typst-api
    docker exec typst-api curl -s localhost:8080/health   # templates_sha zeigt den laufenden Template-Stand
    ```
 
-2. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume. Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
+3. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume. Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
 
    ```bash
    for f in postgres/migrations/*.sql; do
@@ -246,7 +242,26 @@ Nach einem `git pull` auf dem Server:
    done
    ```
 
-3. **Workflows neu importieren** und Credentials wieder zuweisen (siehe oben).
+4. **Alles neu starten:** `docker compose up -d --build`. Das baut die Images neu und schreibt die Konfiguration erneut.
+
+5. **Workflows neu importieren** und Credentials wieder zuweisen (siehe oben).
+
+## Datensicherung
+
+Die festen Volumes schuetzen vor versehentlichem Loeschen, nicht vor einem Plattendefekt oder dem Verlust des Servers. `backup.sh` legt einen komprimierten Dump in `backups/` ab und entfernt Dumps, die aelter als 30 Tage sind. Als taeglicher Cronjob auf dem Server:
+
+```bash
+0 3 * * * /pfad/zum/repo/backup.sh >> /pfad/zum/repo/backups/backup.log 2>&1
+```
+
+Die Dumps zusaetzlich regelmaessig vom Server wegkopieren (z.B. mit `rsync` oder `rclone` auf einen anderen Rechner oder Speicher). Rechnungen und Buchungsbelege muessen mehrere Jahre aufbewahrt werden.
+
+Wiederherstellen (ersetzt die komplette Datenbank, vorher alle Workflows deaktivieren):
+
+```bash
+docker exec orderdb sh -c 'U=$(cat /run/secrets/db_admin_user.txt); D=$(cat /run/secrets/db_name.txt); dropdb -U "$U" --force "$D" && createdb -U "$U" "$D"'
+gunzip -c backups/<datei>.sql.gz | docker exec -i orderdb sh -c 'psql -q -v ON_ERROR_STOP=1 -U "$(cat /run/secrets/db_admin_user.txt)" -d "$(cat /run/secrets/db_name.txt)"'
+```
 
 ## typst-api
 

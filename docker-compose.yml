@@ -48,6 +48,59 @@ services:
       - n8n-backend
 
   # ---------------------------------------------------------------------------
+  # Konfiguration – schreibt die Variablen unten bei jedem Start nach
+  # app_config (Werte aus der .env bzw. den Umgebungsvariablen des Projekts
+  # im Hosting-Panel). Leere Variablen werden übersprungen, der Wert in der
+  # Datenbank bleibt dann, wie er ist. Danach bleibt der Container im
+  # Leerlauf; durch "unless-stopped" läuft er auch nach einem Server-Neustart
+  # erneut. Neue oder geänderte Werte kommen nur mit "docker compose up -d"
+  # an (Container wird neu erstellt), NICHT mit "docker compose restart".
+  # Namensschema und Details: config-loader/apply-config.sh, README Schritt 5.
+  # ---------------------------------------------------------------------------
+  config:
+    build: ./config-loader
+    restart: unless-stopped
+    container_name: app-config
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - secrets_data:/run/secrets:ro
+    environment:
+      ETSY_API_KEY:              ${ETSY_API_KEY:-}
+      ETSY_SHOP_ID:              ${ETSY_SHOP_ID:-}
+      NOTION_DATABASE_ID:        ${NOTION_DATABASE_ID:-}
+      MAIL_FROM:                 ${MAIL_FROM:-}
+      MAIL_TO:                   ${MAIL_TO:-}
+      SELLER_NAME:               ${SELLER_NAME:-}
+      SELLER_BUSINESS_NAME:      ${SELLER_BUSINESS_NAME:-}
+      SELLER_TAGLINE:            ${SELLER_TAGLINE:-}
+      SELLER_STREET:             ${SELLER_STREET:-}
+      SELLER_ZIP:                ${SELLER_ZIP:-}
+      SELLER_CITY:               ${SELLER_CITY:-}
+      SELLER_COUNTRY:            ${SELLER_COUNTRY:-}
+      SELLER_EMAIL:              ${SELLER_EMAIL:-}
+      SELLER_PHONE:              ${SELLER_PHONE:-}
+      SELLER_WEBSITE:            ${SELLER_WEBSITE:-}
+      SELLER_IBAN:               ${SELLER_IBAN:-}
+      SELLER_BANK_NAME:          ${SELLER_BANK_NAME:-}
+      SELLER_TAX_ID:             ${SELLER_TAX_ID:-}
+      SELLER_VAT_ID:             ${SELLER_VAT_ID:-}
+      SELLER_KLEINUNTERNEHMER:   ${SELLER_KLEINUNTERNEHMER:-}
+      ETSY_RC_RECIPIENT_NAME:    ${ETSY_RC_RECIPIENT_NAME:-}
+      ETSY_RC_RECIPIENT_STREET:  ${ETSY_RC_RECIPIENT_STREET:-}
+      ETSY_RC_RECIPIENT_ZIP:     ${ETSY_RC_RECIPIENT_ZIP:-}
+      ETSY_RC_RECIPIENT_CITY:    ${ETSY_RC_RECIPIENT_CITY:-}
+      ETSY_RC_RECIPIENT_COUNTRY: ${ETSY_RC_RECIPIENT_COUNTRY:-}
+      ETSY_RC_RECIPIENT_VAT_ID:  ${ETSY_RC_RECIPIENT_VAT_ID:-}
+      ETSY_RC_START_DATE:        ${ETSY_RC_START_DATE:-}
+      ETSY_RC_PAYMENT_NOTE:      ${ETSY_RC_PAYMENT_NOTE:-}
+      ETSY_RC_NOTE:              ${ETSY_RC_NOTE:-}
+    networks:
+      - n8n-backend
+
+  # ---------------------------------------------------------------------------
   # Typst PDF API – erzeugt Rechnungen, Lieferscheine, Versandetiketten.
   # Erreichbar für n8n intern unter: http://typst-api:8080
   # ---------------------------------------------------------------------------
@@ -87,6 +140,20 @@ networks:
   n8n-backend:
     external: true
 
+# ---------------------------------------------------------------------------
+# Volumes mit festen Namen, als "external" markiert: Compose legt sie nie
+# selbst an und löscht sie nie. Weder "docker compose down -v" noch das
+# Löschen des Projekts im Hosting-Panel noch ein anderer Projektname
+# berühren die Daten. Einmalig vor dem ersten Start anlegen (README):
+#   docker volume create bookkeeping_pgdata
+#   docker volume create bookkeeping_secrets
+# Fehlt eines, bricht "docker compose up" mit einer Fehlermeldung ab, statt
+# still mit einer leeren Datenbank zu starten.
+# ---------------------------------------------------------------------------
 volumes:
   secrets_data:
+    external: true
+    name: bookkeeping_secrets
   postgres_data:
+    external: true
+    name: bookkeeping_pgdata
