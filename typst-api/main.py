@@ -16,11 +16,14 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, model_validator
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 ASSETS_DIR    = Path(__file__).parent / "assets"
 TYPST_BIN     = shutil.which("typst") or "typst"
+
+# Fähigkeiten, die Workflows vor dem Rendern prüfen können (z.B. Workflow 05)
+FEATURES = ["discount", "reverse_charge"]
 
 # Fingerabdruck der eingebauten Templates. Templates werden ins Image kopiert –
 # nach Änderungen muss neu gebaut werden (docker compose up -d --build typst-api).
@@ -36,12 +39,20 @@ app = FastAPI(title="Typst PDF API", version="1.0.0")
 # Shared data models
 # ---------------------------------------------------------------------------
 
-class Address(BaseModel):
+class Model(BaseModel):
+    # Unbekannte Felder ablehnen statt still zu verwerfen: schickt ein neuerer
+    # Workflow Felder an ein veraltetes Image, gibt es einen 422 statt eines
+    # PDFs, dem z.B. der Rabatt oder der Reverse-Charge-Vermerk fehlt.
+    model_config = ConfigDict(extra="forbid")
+
+
+class Address(Model):
     name:    str
     street:  Optional[str] = None
     zip:     Optional[str] = None
     city:    Optional[str] = None
     country: Optional[str] = None
+    vat_id:  Optional[str] = None                # USt-IdNr (z.B. "DE123456789"), falls vorhanden
 
 
 class Seller(Address):
@@ -54,11 +65,10 @@ class Seller(Address):
     bank_name:     Optional[str] = None
     # Steuer
     tax_id:        Optional[str] = None          # Steuernummer (z.B. "123/456/78901")
-    vat_id:        Optional[str] = None          # USt-IdNr (z.B. "DE123456789"), falls vorhanden
     kleinunternehmer: bool = True                # §19 UStG → keine MwSt
 
 
-class LineItem(BaseModel):
+class LineItem(Model):
     pos:         int
     description: str
     quantity:    float
@@ -71,7 +81,7 @@ class LineItem(BaseModel):
 # Request bodies
 # ---------------------------------------------------------------------------
 
-class InvoiceRequest(BaseModel):
+class InvoiceRequest(Model):
     invoice_number: str
     invoice_date:   str                          # "06.04.2026"
     order_id:       Optional[str] = None
@@ -83,11 +93,22 @@ class InvoiceRequest(BaseModel):
     discount:       float = 0.0                  # Rabatt (Gutschein), positiv angeben
     total:          float
     currency:       str = "EUR"
-    payment_note:   str = "Bereits bezahlt via Etsy Payments"
+    payment_note:   Optional[str] = "Bereits bezahlt via Etsy Payments"
     note:           Optional[str] = None         # persönlicher Gruß / Hinweis
+    # B2B-Leistung ins EU-Ausland (z.B. an Etsy Ireland): keine USt,
+    # Steuerschuldnerschaft des Leistungsempfängers
+    reverse_charge: bool = False
+    service_period: Optional[str] = None         # "01.09.2026 – 30.09.2026"
+
+    @model_validator(mode="after")
+    def _reverse_charge_needs_vat_ids(self):
+        # §14a Abs. 1 UStG: USt-IdNr. von Leistendem und Empfänger sind Pflicht
+        if self.reverse_charge and not (self.seller.vat_id and self.buyer.vat_id):
+            raise ValueError("reverse_charge erfordert seller.vat_id und buyer.vat_id")
+        return self
 
 
-class DeliveryNoteRequest(BaseModel):
+class DeliveryNoteRequest(Model):
     delivery_number: str
     date:            str
     order_id:        Optional[str] = None
@@ -99,7 +120,7 @@ class DeliveryNoteRequest(BaseModel):
     note:            Optional[str] = None        # persönlicher Gruß / Hinweis
 
 
-class ShippingLabelRequest(BaseModel):
+class ShippingLabelRequest(Model):
     sender:          Address
     recipient:       Address
     tracking_number: Optional[str] = None
@@ -176,7 +197,7 @@ def pdf_response(pdf_bytes: bytes, filename: str) -> Response:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "typst": TYPST_BIN, "templates_sha": TEMPLATES_SHA}
+    return {"status": "ok", "typst": TYPST_BIN, "templates_sha": TEMPLATES_SHA, "features": FEATURES}
 
 
 @app.post("/invoice", summary="Rechnung als PDF")

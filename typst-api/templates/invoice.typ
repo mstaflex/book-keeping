@@ -6,6 +6,10 @@
 #let d = json("data.json")
 #let s = d.seller
 #let b = d.buyer
+// Reverse Charge: B2B-Leistung ins EU-Ausland (z.B. Monatsrechnung an Etsy).
+// Keine USt auf der Rechnung, auch kein §19-Hinweis – die Leistung ist im
+// Inland nicht steuerbar, die Steuer schuldet der Empfänger.
+#let rc = d.at("reverse_charge", default: false)
 
 // ── Hilfsfunktionen ──────────────────────────────────────
 #let eur(n) = {
@@ -69,6 +73,7 @@
   #if b.street  != none { b.street  + linebreak() }
   #if b.zip     != none { b.zip + " " }#if b.city    != none { b.city    + linebreak() }
   #if b.country != none { b.country }
+  #if b.at("vat_id", default: none) != none [ \ USt-IdNr. #b.vat_id ]
 ]
 
 // ── Betreff + Datum ───────────────────────────────────────
@@ -87,13 +92,14 @@
     // Steuernummer ≠ USt-IdNr. – nicht falsch beschriften (§14 UStG).
     // Kleinunternehmer: Steuernummer steht im §19-Hinweis unten.
     #if s.vat_id != none [ \ USt-IdNr. #s.vat_id ] else if s.tax_id != none and not s.kleinunternehmer [ \ Steuernr. #s.tax_id ]
+    #if d.at("service_period", default: none) != none [ \ Leistungszeitraum: #d.service_period ]
   ]),
 )
 #v(4mm)
 
 // ── Tabelle ───────────────────────────────────────────────
-#let show-vat = (not s.kleinunternehmer) and d.items.any(i => i.vat_rate > 0)
-#let ship-vat = if s.kleinunternehmer { 0.0 } else { 0.19 }
+#let show-vat = (not s.kleinunternehmer) and (not rc) and d.items.any(i => i.vat_rate > 0)
+#let ship-vat = if s.kleinunternehmer or rc { 0.0 } else { 0.19 }
 // Zahlenspalten "auto": feste em-Breiten waren schmaler als die fetten
 // Überschriften ("Einzelpreis" lief in "Menge" hinein).
 #let cols = if show-vat { (auto, 1fr, auto, auto, auto, auto) } else { (auto, 1fr, auto, auto, auto) }
@@ -123,15 +129,17 @@
 
 #table(
   columns: cols,
-  // Header
-  table.hline(stroke: 0.5pt + luma(100)),
-  table.cell(align: center,  text(weight: "bold", size: 9pt)[Pos.]),
-  table.cell(                text(weight: "bold", size: 9pt)[Beschreibung]),
-  table.cell(align: center,  text(weight: "bold", size: 9pt)[Menge]),
-  table.cell(align: right,   text(weight: "bold", size: 9pt)[Einzelpreis]),
-  ..if show-vat { (table.cell(align: center, text(weight: "bold", size: 9pt)[MwSt.]),) } else { () },
-  table.cell(align: right,   text(weight: "bold", size: 9pt)[Gesamt]),
-  table.hline(stroke: 0.5pt + luma(100)),
+  // Header (table.header: wird bei mehrseitigen Rechnungen wiederholt)
+  table.header(
+    table.hline(stroke: 0.5pt + luma(100)),
+    table.cell(align: center,  text(weight: "bold", size: 9pt)[Pos.]),
+    table.cell(                text(weight: "bold", size: 9pt)[Beschreibung]),
+    table.cell(align: center,  text(weight: "bold", size: 9pt)[Menge]),
+    table.cell(align: right,   text(weight: "bold", size: 9pt)[Einzelpreis]),
+    ..if show-vat { (table.cell(align: center, text(weight: "bold", size: 9pt)[MwSt.]),) } else { () },
+    table.cell(align: right,   text(weight: "bold", size: 9pt)[Gesamt]),
+    table.hline(stroke: 0.5pt + luma(100)),
+  ),
   // Datenzeilen
   ..d.items.enumerate().map(((idx, i)) => (
     table.cell(align: center)[#(idx + 1)],
@@ -154,7 +162,7 @@
 #let disc-factor = if items-sum > 0 { (items-sum - discount) / items-sum } else { 1.0 }
 #let vat-groups = {
   let g = (:)
-  if not s.kleinunternehmer {
+  if not s.kleinunternehmer and not rc {
     for i in d.items {
       if i.vat_rate > 0 {
         let k = pct(i.vat_rate)
@@ -181,7 +189,7 @@
       text(fill: luma(90))[#label], align(right)[#amount],
     )
     // "Netto" suggeriert bei §19 UStG, dass noch Steuer hinzukäme.
-    #sum-row(if s.kleinunternehmer [Zwischensumme:] else [Nettosumme:], eur(d.subtotal))
+    #sum-row(if rc [Summe netto:] else if s.kleinunternehmer [Zwischensumme:] else [Nettosumme:], eur(d.subtotal))
     #if d.shipping_cost > 0 { v(2pt); sum-row([Versandkosten:], eur(d.shipping_cost)) }
     #for p in vat-groups.pairs() { v(2pt); sum-row([#p.at(0) Mehrwertsteuer:], eur(p.at(1))) }
     #v(4pt)
@@ -198,10 +206,18 @@
 #v(1.2em)
 
 // ── Zahlungshinweis ───────────────────────────────────────
-#text(fill: luma(90))[*Zahlungsstatus:*] #d.payment_note
+#if d.payment_note != none [
+  #text(fill: luma(90))[*Zahlungsstatus:*] #d.payment_note
+]
 
-// ── §19-Hinweis ───────────────────────────────────────────
-#if s.kleinunternehmer [
+// ── Steuerhinweis: Reverse Charge bzw. §19 ────────────────
+#if rc [
+  #v(0.6em)
+  #text(size: 8.5pt, fill: luma(130))[
+    Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge, Art. 196 MwStSystRL). \
+    VAT reverse charge: VAT is to be accounted for by the recipient.
+  ]
+] else if s.kleinunternehmer [
   #v(0.6em)
   #text(size: 8.5pt, fill: luma(130))[
     Gemäß §19 UStG wird keine Umsatzsteuer berechnet.#if s.tax_id != none { " · Steuernummer: " + s.tax_id }
