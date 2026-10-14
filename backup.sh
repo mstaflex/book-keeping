@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # backup.sh – PostgreSQL-Dump erzeugen.
-# Als Cron auf dem VPS einrichten:
+# Als Cron auf dem Server einrichten:
 #   0 3 * * * /opt/buschi-bookkeeping/backup.sh
 # =============================================================================
 set -euo pipefail
