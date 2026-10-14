@@ -199,6 +199,34 @@ Rein digitale Bestellungen bekommen deshalb keine Kundenrechnung mehr (Workflow 
 
 Nicht automatisiert: Wird ein digitaler Verkauf **nach** Rechnungsstellung erstattet, ist eine Korrektur der Etsy-Rechnung (Gutschrift/Storno) manuell noetig. Teilerstattungen mindern den abgerechneten Betrag nicht.
 
+## Datenbank im Browser ansehen (Adminer)
+
+[Adminer](https://www.adminer.org) ist eine schlanke Web-Oberflaeche fuer die Datenbank (aehnlich phpMyAdmin): Tabellen durchsehen, filtern, einzelne Werte korrigieren, SQL ausfuehren. Der Container ist optional und startet nicht mit dem normalen `docker compose up -d`:
+
+```bash
+docker compose --profile tools up -d adminer     # starten
+docker compose --profile tools stop adminer      # danach wieder stoppen
+```
+
+Adminer lauscht nur auf `127.0.0.1:8081` des Servers, also nicht im Internet. Zugriff vom eigenen Rechner per SSH-Tunnel:
+
+```bash
+ssh -L 8081:127.0.0.1:8081 <user>@<dein-server>
+```
+
+Dann im Browser `http://localhost:8081` oeffnen und anmelden:
+
+| Feld | Wert |
+|---|---|
+| **System** | PostgreSQL |
+| **Server** | `orderdb` (vorausgefuellt) |
+| **Benutzer / Passwort** | Worker-User aus den Bootstrap-Logs; den Admin-User nur fuer Schemaaenderungen |
+| **Datenbank** | DB-Name aus den Bootstrap-Logs (Standard `orderdb`) |
+
+Vorsicht bei Aenderungen von Hand: `invoice_counter`, `orders.invoice_number`, `orders.etsy_rc_invoice_number` und `etsy_rc_invoices` bilden den lueckenlosen Nummernkreis und die unveraenderlichen Rechnungs-Snapshots. Dort nichts loeschen oder umnummerieren. Lesen und `app_config` pflegen ist unproblematisch.
+
+Den Port nie auf `0.0.0.0` umstellen oder ueber einen oeffentlichen Reverse-Proxy freigeben: Das waere eine Anmeldeseite zur Buchhaltungs-DB direkt im Internet. Unterstuetzt ein Deploy-Werkzeug keine Compose-Profile, startet Adminer mit dem Stack, bleibt aber auf `127.0.0.1` begrenzt; dann bei Nichtgebrauch stoppen.
+
 ## Updates einspielen
 
 Nach einem `git pull` auf dem Server:

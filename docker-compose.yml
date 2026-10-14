@@ -61,6 +61,28 @@ services:
     # ports:
     #   - "8080:8080"
 
+  # ---------------------------------------------------------------------------
+  # Adminer – Web-Oberfläche für die Datenbank (wie phpMyAdmin, für Postgres).
+  # Optional: startet NICHT mit "docker compose up -d", nur mit
+  #   docker compose --profile tools up -d adminer
+  # Port nur auf 127.0.0.1 des Servers → Zugriff per SSH-Tunnel (README).
+  # Nie auf 0.0.0.0 bzw. ohne IP veröffentlichen: das wäre ein Login zur
+  # Buchhaltungs-DB direkt im Internet.
+  # ---------------------------------------------------------------------------
+  adminer:
+    image: adminer:5.5.1
+    profiles: ["tools"]
+    restart: "no"
+    container_name: adminer
+    depends_on:
+      - postgres
+    environment:
+      ADMINER_DEFAULT_SERVER: orderdb
+    ports:
+      - "127.0.0.1:8081:8080"
+    networks:
+      - n8n-backend
+
 networks:
   n8n-backend:
     external: true
