@@ -136,6 +136,7 @@ Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeufe
 |---|---|---|
 | `ETSY_API_KEY` | `etsy.api_key` | Format `keystring:shared_secret` |
 | `ETSY_SHOP_ID` | `etsy.shop_id` | |
+| `ETSY_SYNC_START` | `etsy.sync_start` | optional: ab welchem Tag (`YYYY-MM-DD`, deutsche Zeit) der erste Abruf von Bestellungen und Ledger beginnt (Workflows 01, 02); ohne: die letzten 90 Tage |
 | `NOTION_DATABASE_ID` | `notion.database_id` | |
 | `MAIL_FROM`, `MAIL_TO` | `mail.from`, `mail.to` | Absender/Empfaenger der PDF-Mails (Workflows 04, 05) |
 | `SELLER_NAME`, `SELLER_STREET`, `SELLER_ZIP`, `SELLER_CITY` | `seller.*` | Pflicht fuer Rechnungen |
@@ -153,6 +154,7 @@ Zu den Werten:
 - Fehlen Pflichtwerte, brechen die Workflows mit einer klaren Fehlermeldung ab, statt Rechnungen mit Platzhaltern zu erzeugen.
 - Empfaenger der Etsy-Rechnung, z.B. `ETSY_RC_RECIPIENT_NAME=Etsy Ireland UC`, `ETSY_RC_RECIPIENT_STREET=One Le Pole Square, Ship Street Great`, `ETSY_RC_RECIPIENT_CITY=Dublin 8`, `ETSY_RC_RECIPIENT_COUNTRY=Irland`, `ETSY_RC_RECIPIENT_VAT_ID=IE9777587C`. Anschrift und USt-IdNr. bitte mit deinen bisherigen Rechnungen an Etsy bzw. einer Etsy-Gebuehrenrechnung abgleichen.
 - `ETSY_RC_START_DATE`: alles davor hast du bereits selbst an Etsy fakturiert; es darf nicht doppelt auf eine Rechnung.
+- `ETSY_SYNC_START` wirkt nur, solange noch kein Abruf gelaufen ist (kein `etsy.receipts_cursor`, leere Tabelle `etsy_transactions`). Danach setzen beide Workflows dort fort, wo sie aufgehoert haben; eine spaetere Aenderung allein holt also nichts nach (siehe [Etsy-Daten neu abrufen](#etsy-daten-neu-abrufen)). Fuer die Reverse-Charge-Rechnung muessen die Bestellungen ab `ETSY_RC_START_DATE` vorliegen, `ETSY_SYNC_START` also spaetestens an diesem Tag beginnen.
 
 Werte lassen sich weiterhin auch per SQL oder Adminer in `app_config` eintragen. Sie werden nur dann ueberschrieben, wenn dieselbe Variable gesetzt ist. Den Schluessel `etsy.receipts_cursor` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung); er ist bewusst keine Variable.
 
@@ -185,6 +187,62 @@ Bei digitalen Artikeln gilt Etsy gegenueber dem Kaeufer als Verkaeufer (Art. 9a 
 Rein digitale Bestellungen bekommen deshalb keine Kundenrechnung mehr (Workflow 04 lehnt sie ab, ohne eine Nummer zu vergeben), gemischte nur ueber die physischen Artikel.
 
 Nicht automatisiert: Wird ein digitaler Verkauf **nach** Rechnungsstellung erstattet, ist eine Korrektur der Etsy-Rechnung (Gutschrift/Storno) manuell noetig. Teilerstattungen mindern den abgerechneten Betrag nicht.
+
+## Etsy-Zahlungskonto (Workflow 02)
+
+Workflow 02 speichert jeden Eintrag des Etsy-Zahlungskontos (Ledger) als Zeile in `etsy_transactions`, Betrag in EUR mit Vorzeichen. `ledger_type`, `reference_type` und `reference_id` sind die Originalangaben von Etsy, `type` ist die Einordnung:
+
+| `type` | Etsy-`ledger_type` | Bedeutung |
+|---|---|---|
+| `sale` | `PAYMENT_GROSS` | Zahlung des Kaeufers, **brutto** inkl. der von Etsy erhobenen VAT/Sales Tax |
+| `marketplace_tax` | `VAT_TAX_EP`, `SALES_TAX` | die von Etsy als Plattform erhobene Steuer als Minus-Zeile; Etsy fuehrt sie selbst ab |
+| `fee_transaction` | `TRANSACTION` | Transaktionsgebuehr |
+| `fee_listing` | `LISTING`, `RENEW_SOLD`, `RENEW_SOLD_AUTO`, `RENEW_AUTO`, `RENEW_EXPIRED`, `AUTO_RENEW_EXPIRED` | Einstell- und Verlaengerungsgebuehren |
+| `fee_processing` | `PAYMENT_PROCESSING_FEE` | Zahlungsgebuehr |
+| `fee_ads` | `OFFSITE_ADS_FEE` | Offsite Ads |
+| `refund` | `REFUND` | Erstattung |
+| `payout` | `DISBURSE`, `DISBURSE2` | Auszahlung aufs Bankkonto |
+| `transfer` | `BILLING_PAYMENT` | Etsy belastet die hinterlegte Karte, um einen negativen Saldo auszugleichen |
+| `other` | alle anderen | unbekannter Typ: pruefen und in Workflow 02 (`ENTRY_TYPE_MAP`) ergaenzen |
+
+Fuer die Auswertung:
+
+- **Umsatz ohne die von Etsy erhobene Steuer = Summe aus `sale` und `marketplace_tax`.** Die `marketplace_tax`-Zeilen also nicht herausfiltern, sonst enthaelt der Umsatz die VAT. Bei rein digitalen Bestellungen ergibt das den Betrag, den Workflow 05 an Etsy fakturiert (am Monatsende koennen Ledger-Datum und Bestelldatum in verschiedene Monate fallen).
+- Gebuehren sind alle `fee_*`. `payout` und `transfer` sind Geldbewegungen zwischen Etsy-Konto und Bank bzw. Karte, weder Ertrag noch Aufwand.
+- `order_id` ist nur gesetzt, wenn Etsy den Eintrag direkt einer Bestellung zuordnet (`reference_type = 'receipt'`). Gebuehren verweisen meist auf andere Objekte (`reference_type`/`reference_id`).
+
+Monatsuebersicht, z.B. in Adminer:
+
+```sql
+SELECT month,
+       SUM(amount) FILTER (WHERE type IN ('sale', 'marketplace_tax')) AS umsatz_ohne_etsy_steuer,
+       SUM(amount) FILTER (WHERE type = 'marketplace_tax')            AS etsy_steuer,
+       SUM(amount) FILTER (WHERE type LIKE 'fee%')                    AS gebuehren,
+       SUM(amount) FILTER (WHERE type = 'refund')                     AS erstattungen,
+       SUM(amount) FILTER (WHERE type IN ('payout', 'transfer'))      AS geldbewegungen,
+       COUNT(*)    FILTER (WHERE type = 'other')                      AS unbekannt
+FROM etsy_transactions
+GROUP BY month
+ORDER BY month;
+```
+
+### Etsy-Daten neu abrufen
+
+Workflow 01 merkt sich die zuletzt verarbeitete Aenderung (`etsy.receipts_cursor`), Workflow 02 setzt beim juengsten gespeicherten Ledger-Eintrag fort. Aeltere Daten holen beide nur nach, wenn man ihren Startpunkt zuruecksetzt, z.B. um Bestellungen vor dem ersten Abruf nachzuladen oder nach Migration 004 alle Ledger-Eintraege mit `ledger_type` und Referenz neu einzuordnen:
+
+1. `ETSY_SYNC_START` auf den ersten gewuenschten Tag setzen und `docker compose up -d` ausfuehren.
+2. Startpunkte zuruecksetzen (Adminer oder psql):
+
+   ```sql
+   -- Bestellungen: Workflow 01 beginnt beim naechsten Lauf bei ETSY_SYNC_START
+   DELETE FROM app_config WHERE scope = 'etsy' AND key = 'receipts_cursor';
+   -- Ledger: Workflow 02 beginnt nur bei leerer Tabelle bei ETSY_SYNC_START
+   DELETE FROM etsy_transactions;
+   ```
+
+3. Die Workflows laufen nach Zeitplan oder per **Execute workflow** in n8n.
+
+Bestellungen werden dabei nur aktualisiert, nicht dupliziert; Rechnungsnummern und die Markierung fuer die Etsy-Rechnung bleiben unberuehrt. Ledger-Eintraege kommen mit derselben `transaction_id` zurueck. Das Leeren von `etsy_transactions` nur, solange nichts anderes auf diese Tabelle aufbaut (z.B. ein Export, der `lexoffice_synced` setzt).
 
 ## Datenbank im Browser ansehen (Adminer)
 
@@ -242,6 +300,8 @@ Nach einem `git pull` auf dem Server:
      docker exec -i orderdb sh -c 'psql -v ON_ERROR_STOP=1 -U "$(cat /run/secrets/db_admin_user.txt)" -d "$(cat /run/secrets/db_name.txt)"' < "$f"
    done
    ```
+
+   Migration 004 ordnet bestehende Ledger-Zeilen neu ein (Listing-Verlaengerungen, Kartenbelastungen), soweit das aus der gespeicherten Beschreibung moeglich ist. `ledger_type` und die Referenz auf Bestellung bzw. Gebuehr bekommen alte Zeilen erst durch einen Neu-Abruf ([Etsy-Daten neu abrufen](#etsy-daten-neu-abrufen)).
 
 4. **Alles neu starten:** `docker compose up -d --build`. Das baut die Images neu und schreibt die Konfiguration erneut.
 

@@ -63,13 +63,19 @@ CREATE TABLE etsy_transactions (
     transaction_id   TEXT UNIQUE NOT NULL,
     order_id         TEXT,
     type             TEXT NOT NULL CHECK (type IN (
-                         'sale', 'fee_transaction', 'fee_listing',
+                         'sale',             -- Zahlung des Käufers, brutto inkl. von Etsy erhobener VAT
+                         'fee_transaction', 'fee_listing',
                          'fee_ads', 'fee_processing', 'refund',
                          'tax',              -- eigene Steuern (Rechnungen, manuell)
-                         'marketplace_tax',  -- von Etsy als 'deemed supplier' einbehalten/abgeführt
-                         'payout'
+                         'marketplace_tax',  -- von Etsy als 'deemed supplier' erhoben (Minus-Zeile zu 'sale')
+                         'payout',           -- Auszahlung vom Etsy-Zahlungskonto aufs Bankkonto
+                         'transfer',         -- sonstige Geldbewegung, z.B. Kartenbelastung bei negativem Saldo
+                         'other'             -- unbekannter Ledger-Typ, prüfen (siehe ledger_type)
                      )),
     description      TEXT,
+    ledger_type      TEXT,          -- Original-Typ von Etsy, z.B. 'PAYMENT_GROSS'
+    reference_type   TEXT,          -- worauf der Eintrag verweist: receipt, payment, transaction, ...
+    reference_id     TEXT,
     amount           NUMERIC(10,2),
     fee_amount       NUMERIC(10,2),
     net_amount       NUMERIC(10,2),

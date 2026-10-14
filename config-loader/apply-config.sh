@@ -49,6 +49,16 @@ n=0
 for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER)_[A-Z0-9_]+=' | tr -d '=' | sort -u); do
   value="$(printenv "$name" || true)"
   [ -n "$value" ] || continue
+  # Datumswerte prüfen: ein Tippfehler würde sonst erst im Workflow als
+  # Cast-Fehler auffallen.
+  case "$name" in
+    ETSY_SYNC_START|ETSY_RC_START_DATE)
+      case "$value" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+        *) log "FEHLER: $name ist kein Datum im Format YYYY-MM-DD – übersprungen"
+           continue ;;
+      esac ;;
+  esac
   case "$name" in
     ETSY_RC_*) scope=etsy_rc; key=${name#ETSY_RC_} ;;
     ETSY_*)    scope=etsy;    key=${name#ETSY_} ;;

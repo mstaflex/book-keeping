@@ -16,7 +16,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'api_key')  AS api_key,\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'shop_id') AS shop_id,\n  -- Cursor = updated_timestamp (Etsy-Zeit) des zuletzt verarbeiteten Receipts.\n  -- Ohne Cursor (Erstlauf / Upgrade): jüngste Bestellung, sonst letzte 24h.\n  COALESCE(\n    (SELECT value::BIGINT FROM app_config WHERE scope = 'etsy' AND key = 'receipts_cursor'),\n    EXTRACT(EPOCH FROM COALESCE(MAX(o.order_date), NOW() - INTERVAL '24 hours'))::BIGINT\n  ) AS cursor_ts\nFROM orders o\nWHERE o.source = 'etsy';",
+        "query": "SELECT\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'api_key')  AS api_key,\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'shop_id') AS shop_id,\n  -- Cursor = updated_timestamp (Etsy-Zeit) des zuletzt verarbeiteten Receipts.\n  -- Ohne Cursor (Erstlauf, oder Cursor gelöscht für eine Neu-Synchronisation):\n  -- ETSY_SYNC_START (etsy.sync_start, deutsche Zeit); ohne die jüngste\n  -- Bestellung (Upgrade alter Installationen), sonst 90 Tage – derselbe\n  -- Startpunkt wie beim Ledger-Sync (Workflow 02).\n  COALESCE(\n    (SELECT value::BIGINT FROM app_config WHERE scope = 'etsy' AND key = 'receipts_cursor'),\n    (SELECT EXTRACT(EPOCH FROM value::date::timestamp AT TIME ZONE 'Europe/Berlin')::BIGINT\n       FROM app_config WHERE scope = 'etsy' AND key = 'sync_start'),\n    EXTRACT(EPOCH FROM COALESCE(MAX(o.order_date), NOW() - INTERVAL '90 days'))::BIGINT\n  ) AS cursor_ts\nFROM orders o\nWHERE o.source = 'etsy';",
         "options": {}
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000002",

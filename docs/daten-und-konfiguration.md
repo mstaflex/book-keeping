@@ -24,6 +24,12 @@ README (Schritte 2 und 5, „Updates einspielen“, „Datensicherung“).
 `app_config` ist damit ein Abbild der Umgebungsvariablen. Einzige Ausnahme ist
 `etsy.receipts_cursor`, den Workflow 01 selbst pflegt.
 
+`ETSY_SYNC_START` (`etsy.sync_start`) legt nur den Startpunkt fuer den ersten
+Abruf fest: Workflow 01 nutzt ihn, solange `etsy.receipts_cursor` fehlt,
+Workflow 02, solange `etsy_transactions` leer ist. Eine spaetere Aenderung
+holt allein nichts nach; dafuer die Startpunkte zuruecksetzen (README:
+„Etsy-Daten neu abrufen“).
+
 ## Ablauf beim Start
 
 1. **`bootstrap`** schreibt fehlende Secret-Dateien. Ist das Volume schon
@@ -37,7 +43,9 @@ README (Schritte 2 und 5, „Updates einspielen“, „Datensicherung“).
    2. prueft, dass die Tabelle `app_config` existiert, sonst Abbruch mit
       Hinweis auf die Migrationen;
    3. schreibt jede gesetzte, nicht leere Variable als Upsert. Geaendert wird
-      nur, wenn sich der Wert wirklich unterscheidet;
+      nur, wenn sich der Wert wirklich unterscheidet. Datumswerte
+      (`ETSY_SYNC_START`, `ETSY_RC_START_DATE`) muessen `YYYY-MM-DD` sein,
+      sonst werden sie mit Fehlermeldung uebersprungen;
    4. loggt die geaenderten Schluessel und die noch fehlenden Pflichtwerte.
       Werte selbst werden nie geloggt;
    5. bleibt im Leerlauf. Wegen `restart: unless-stopped` startet Docker ihn
@@ -57,6 +65,7 @@ README (Schritte 2 und 5, „Updates einspielen“, „Datensicherung“).
 | Projekt im Panel geloescht, anderer Projektname | Bleiben erhalten; ein neuer Stack findet dieselben Daten und Passwoerter | – |
 | Variable geleert oder entfernt | – | Wert in der Datenbank bleibt unveraendert (loeschen nur per SQL oder Adminer) |
 | Wert per SQL oder Adminer geaendert | – | Wird beim naechsten Start ueberschrieben, wenn die Variable gesetzt ist |
+| `ETSY_SYNC_START` nach dem ersten Abruf geaendert | Nichts wird nachgeladen | Wert wird geschrieben, wirkt aber erst nach Zuruecksetzen der Startpunkte (README: „Etsy-Daten neu abrufen“) |
 | Tabelle `app_config` fehlt (alte Datenbank ohne Migrationen) | – | Fehlermeldung im Log; Docker startet den Container mit wachsendem Abstand neu, bis die Migrationen gelaufen sind |
 | `docker volume rm bookkeeping_pgdata` | **Endgueltig geloescht** | Wird nach Neuanlage beim naechsten Start wieder geschrieben |
 

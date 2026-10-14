@@ -70,6 +70,7 @@ services:
     environment:
       ETSY_API_KEY:              ${ETSY_API_KEY:-}
       ETSY_SHOP_ID:              ${ETSY_SHOP_ID:-}
+      ETSY_SYNC_START:           ${ETSY_SYNC_START:-}
       NOTION_DATABASE_ID:        ${NOTION_DATABASE_ID:-}
       MAIL_FROM:                 ${MAIL_FROM:-}
       MAIL_TO:                   ${MAIL_TO:-}
