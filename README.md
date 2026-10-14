@@ -10,7 +10,7 @@ Automatisierte Buchhaltung und Dokumentenerstellung für kleine Unternehmen, bet
 | `postgres/` | PostgreSQL mit Schema für Bestellungen, Transaktionen, Rechnungen |
 | `config-loader/` | Schreibt die Konfiguration aus Umgebungsvariablen bei jedem Start nach `app_config` |
 | `typst-api/` | FastAPI-Service zur PDF-Generierung via [Typst](https://typst.app) |
-| `n8n/workflows/` | n8n-Workflow-JSONs (Etsy-Sync, Notion-Sync, Rechnungserstellung) |
+| `n8n/workflows/` | n8n-Workflow-JSONs (Etsy-Sync, Notion-Sync, Rechnungserstellung, Lexoffice-Export) |
 
 ## Installation
 
@@ -146,6 +146,7 @@ Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeufe
 | `ETSY_RC_RECIPIENT_NAME`, `_STREET`, `_ZIP`, `_CITY`, `_COUNTRY`, `_VAT_ID` | `etsy_rc.recipient_*` | Empfaenger der Reverse-Charge-Rechnung (Workflow 05), `_ZIP` optional |
 | `ETSY_RC_START_DATE` | `etsy_rc.start_date` | erster Tag, ab dem Workflow 05 abrechnet (`YYYY-MM-DD`) |
 | `ETSY_RC_PAYMENT_NOTE`, `ETSY_RC_NOTE` | `etsy_rc.payment_note`, `etsy_rc.note` | optionale Texte auf der Etsy-Rechnung |
+| `LEXOFFICE_START_MONTH` | `lexoffice.start_month` | erster Monat, den Workflow 06 nach Lexoffice exportiert (`YYYY-MM`) |
 
 Zu den Werten:
 
@@ -153,6 +154,7 @@ Zu den Werten:
 - Fehlen Pflichtwerte, brechen die Workflows mit einer klaren Fehlermeldung ab, statt Rechnungen mit Platzhaltern zu erzeugen.
 - Empfaenger der Etsy-Rechnung, z.B. `ETSY_RC_RECIPIENT_NAME=Etsy Ireland UC`, `ETSY_RC_RECIPIENT_STREET=One Le Pole Square, Ship Street Great`, `ETSY_RC_RECIPIENT_CITY=Dublin 8`, `ETSY_RC_RECIPIENT_COUNTRY=Irland`, `ETSY_RC_RECIPIENT_VAT_ID=IE9777587C`. Anschrift und USt-IdNr. bitte mit deinen bisherigen Rechnungen an Etsy bzw. einer Etsy-Gebuehrenrechnung abgleichen.
 - `ETSY_RC_START_DATE`: alles davor hast du bereits selbst an Etsy fakturiert; es darf nicht doppelt auf eine Rechnung.
+- `LEXOFFICE_START_MONTH`: alle Monate davor sind schon anders in Lexoffice gebucht (z.B. ueber PayJoe) und werden nie exportiert, sonst entstehen Doppelbuchungen.
 
 Werte lassen sich weiterhin auch per SQL oder Adminer in `app_config` eintragen. Sie werden nur dann ueberschrieben, wenn dieselbe Variable gesetzt ist. Den Schluessel `etsy.receipts_cursor` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung); er ist bewusst keine Variable.
 
@@ -167,10 +169,11 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 | `03_notion_sync.json` | Synchronisiert Bestellungen nach Notion |
 | `04_generate_invoice_pdf.json` | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel) |
 | `05_etsy_reverse_charge_invoice.json` | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
+| `06_etsy_lexoffice_export.json` | Monats-CSV des Etsy-Zahlungskontos fuer Lexoffice (ersetzt PayJoe) |
 
 Nach dem Import in jeder Node das passende Credential aus Schritt 3 auswaehlen (die JSONs enthalten nur Platzhalter wie `POSTGRES_CREDENTIAL_ID`) und die Workflows aktivieren.
 
-> **Sicherheit:** Der Webhook von Workflow 04 (`POST /webhook/generate-docs`, Body `{"order_id": "..."}`) hat keine Authentifizierung. Ist n8n aus dem Internet erreichbar, kann jeder Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. In der Webhook-Node unter **Authentication** am besten *Header Auth* aktivieren und den Header beim Aufrufer mitsenden.
+> **Sicherheit:** Der Webhook von Workflow 04 (`POST /webhook/generate-docs`, Body `{"order_id": "..."}`) hat keine Authentifizierung. Ist n8n aus dem Internet erreichbar, kann jeder Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. In der Webhook-Node unter **Authentication** am besten *Header Auth* aktivieren und den Header beim Aufrufer mitsenden. Dasselbe gilt fuer die Webhooks von Workflow 05 (`etsy-rc-invoice`) und 06 (`etsy-lexoffice-export`): Letzterer liefert in der Antwort die Etsy-Buchungen des Monats und kann einen Monat als importiert markieren.
 
 ## Digitale Verkaeufe: Reverse-Charge-Rechnung an Etsy (Workflow 05)
 
@@ -185,6 +188,49 @@ Bei digitalen Artikeln gilt Etsy gegenueber dem Kaeufer als Verkaeufer (Art. 9a 
 Rein digitale Bestellungen bekommen deshalb keine Kundenrechnung mehr (Workflow 04 lehnt sie ab, ohne eine Nummer zu vergeben), gemischte nur ueber die physischen Artikel.
 
 Nicht automatisiert: Wird ein digitaler Verkauf **nach** Rechnungsstellung erstattet, ist eine Korrektur der Etsy-Rechnung (Gutschrift/Storno) manuell noetig. Teilerstattungen mindern den abgerechneten Betrag nicht.
+
+## Etsy-Zahlungskonto → Lexoffice (Workflow 06)
+
+Ersetzt PayJoe. Aus `etsy_transactions` entsteht pro abgeschlossenem Monat eine kleine CSV fuer ein Lexoffice-Konto ohne Anbindung („Etsy-Zahlungskonto“), mit wenigen Summenzeilen statt einer Zeile je Etsy-Buchung:
+
+| Zeile | Anzahl | Betrag | In Lexoffice zuordnen zu |
+|---|---|---|---|
+| Digitale Verkaeufe netto (Verkauf minus Etsy-VAT) | 1, Monatsletzter | + | Proformarechnung an Etsy (Workflow 05); ihre Nummer steht im Verwendungszweck |
+| Etsy-Gebuehren | 1, Monatsletzter | − | Etsy-Gebuehrenrechnung |
+| Auszahlung | je Auszahlung | − | Geldtransit mit dem Eingang auf dem Bankkonto |
+| Kartenzahlung an Etsy (billing_payment) | je Zahlung | + | je nach Karte |
+| Physischer Verkauf | je Bestellung | + brutto | Kundenrechnung (Workflow 04) |
+
+Buchungslogik, Kontrollen und offene Punkte im Detail: [docs/lexoffice-etsy-export.md](docs/lexoffice-etsy-export.md).
+
+**Ablauf je Monat** (Webhook `POST /webhook/etsy-lexoffice-export`):
+
+1. **Vorschau** (schreibt nichts): Body `{"month": "2026-09"}`. Per Mail kommen Pruefbericht und `etsy_lexoffice_2026-09_VORSCHAU.csv`; mit dem Etsy-Zahlungskonto-Auszug und der Proformarechnung vergleichen.
+2. **Erzeugen**: `{"month": "2026-09", "action": "create"}`. Laeuft automatisch am 2. jedes Monats um 7 Uhr fuer den Vormonat (nach Workflow 05 am 1.). Per Mail kommt `etsy_lexoffice_2026-09.csv`. Erneutes Ausfuehren liefert dieselbe Datei; neu erzeugt wird sie nur mit `"regenerate": true` und nur, solange der Import nicht bestaetigt ist.
+3. In Lexoffice beim Etsy-Zahlungskonto **einmal** importieren (Lexoffice erkennt keine Dubletten, ein Import laesst sich nicht rueckgaengig machen).
+4. **Bestaetigen**: `{"month": "2026-09", "action": "confirm"}`. Erst jetzt wird `lexoffice_synced` fuer die enthaltenen Etsy-Buchungen gesetzt.
+
+Eine Datei entsteht nur, wenn alle Kontrollen bestehen: Monat abgeschlossen und nicht vor `LEXOFFICE_START_MONTH`, keine unbekannten Etsy-Buchungstypen, Erloeszeile gleich Betrag der Proformarechnung, Summe der Zeilen gleich Summe der Etsy-Buchungen, keine Luecke gegenueber Etsys eigenem Kontostand. Sonst nennt die Mail die Gruende. Stammt die Proformarechnung eines Monats nicht aus Workflow 05 (z.B. vor `ETSY_RC_START_DATE` von Hand geschrieben), deren Nummer als `"proforma_number"` mitgeben.
+
+Dasselbe geht im Terminal (Worker-User, wie n8n):
+
+```bash
+q() { docker exec -i orderdb sh -c 'psql -X -At -U "$(cat /run/secrets/db_worker_user.txt)" -d "$(cat /run/secrets/db_name.txt)"' <<< "$1"; }
+q "SELECT lexoffice_export_build('2026-09')->>'report_text'"     # Vorschau mit Pruefbericht, schreibt nichts
+q "SELECT lexoffice_export_create('2026-09')->>'report_text'"    # Datei erzeugen
+# Datei byte-genau holen (psql haengt sonst einen Zeilenumbruch an)
+q "SELECT encode(convert_to(csv, 'UTF8'), 'base64') FROM lexoffice_exports
+   WHERE month = '2026-09' AND superseded_at IS NULL" | base64 -d > etsy_lexoffice_2026-09.csv
+q "SELECT lexoffice_export_confirm('2026-09')->>'report_text'"   # nach dem Import bestaetigen
+```
+
+**Einrichtung:**
+
+1. Migration `004_lexoffice_export.sql` einspielen („Updates einspielen“, Schritt 3).
+2. Workflow 02 neu importieren. Er speichert jetzt Etsys Originaldaten je Buchung (Typ, Kontostand) und traegt bei Verkaeufen die Bestellnummer nach, damit digitale und physische Verkaeufe getrennt werden koennen. Beim ersten Lauf ergaenzt er das automatisch fuer die vorhandenen Buchungen.
+3. `LEXOFFICE_START_MONTH` setzen (Schritt 5): der erste Monat, den PayJoe noch nicht nach Lexoffice gebracht hat.
+4. In Lexoffice ein Konto ohne Anbindung fuer das Etsy-Guthaben anlegen.
+5. Workflow 06 importieren, Credentials zuweisen, eine Vorschau fuer den ersten Monat erzeugen und pruefen. Beim ersten Import in Lexoffice die Spalten Datum, Betrag und Verwendungszweck zuordnen und die Vorschau dort genau ansehen. Danach Workflow 06 aktivieren.
 
 ## Datenbank im Browser ansehen (Adminer)
 
@@ -235,7 +281,7 @@ Nach einem `git pull` auf dem Server:
    docker exec typst-api curl -s localhost:8080/health   # templates_sha zeigt den laufenden Template-Stand
    ```
 
-3. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume. Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
+3. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume (zusammen mit allen Migrationen). Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
 
    ```bash
    for f in postgres/migrations/*.sql; do
@@ -246,6 +292,8 @@ Nach einem `git pull` auf dem Server:
 4. **Alles neu starten:** `docker compose up -d --build`. Das baut die Images neu und schreibt die Konfiguration erneut.
 
 5. **Workflows neu importieren** und Credentials wieder zuweisen (siehe oben).
+
+Die Datenbanklogik (z.B. der Lexoffice-Export) hat Tests. Sie laufen in einem Wegwerf-Container, nie gegen die echte Datenbank: `postgres/tests/run.sh`.
 
 ## Datensicherung
 

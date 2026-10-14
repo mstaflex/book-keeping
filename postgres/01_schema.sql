@@ -67,7 +67,9 @@ CREATE TABLE etsy_transactions (
                          'fee_ads', 'fee_processing', 'refund',
                          'tax',              -- eigene Steuern (Rechnungen, manuell)
                          'marketplace_tax',  -- von Etsy als 'deemed supplier' einbehalten/abgeführt
-                         'payout'
+                         'payout',
+                         'card_payment',     -- Kartenzahlung des Verkäufers an Etsy (billing_payment)
+                         'unknown'           -- von Workflow 02 nicht erkannter Etsy-Typ → Export bricht ab
                      )),
     description      TEXT,
     amount           NUMERIC(10,2),
@@ -76,11 +78,18 @@ CREATE TABLE etsy_transactions (
     currency         TEXT DEFAULT 'EUR',
     date             TIMESTAMPTZ NOT NULL,
     month            TEXT,          -- Format: '2026-04' für Gruppierung
-    lexoffice_synced BOOLEAN DEFAULT FALSE,
-    created_at       TIMESTAMPTZ DEFAULT NOW()
+    lexoffice_synced BOOLEAN DEFAULT FALSE,  -- erst nach bestätigtem Lexoffice-Import (Workflow 06)
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    -- Etsy-Rohdaten des Ledger-Eintrags (Workflow 02)
+    ledger_type      TEXT,          -- Etsys eigener Typ, daraus wird type abgeleitet
+    reference_type   TEXT,          -- Objekt, auf das sich die Buchung bezieht
+    reference_id     TEXT,
+    balance          NUMERIC(12,2), -- Etsy-Guthaben direkt nach der Buchung
+    sequence_number  BIGINT         -- Etsys Reihenfolge der Buchungen
 );
 
 CREATE INDEX idx_etsy_tx_month           ON etsy_transactions (month);
+CREATE INDEX idx_etsy_tx_date            ON etsy_transactions (date);
 CREATE INDEX idx_etsy_tx_synced          ON etsy_transactions (lexoffice_synced);
 CREATE INDEX idx_etsy_tx_order_id        ON etsy_transactions (order_id);
 
@@ -121,6 +130,33 @@ CREATE TABLE etsy_rc_invoices (
     note             TEXT,                      -- Erläuterung auf der Rechnung
     created_at       TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ---------------------------------------------------------------------------
+-- lexoffice_exports  (Monats-CSV des Etsy-Zahlungskontos für Lexoffice,
+--                     Workflow 06; Details in Migration 004)
+-- View etsy_ledger_classified und die Funktionen lexoffice_export_*() legt
+-- Migration 004 an – postgres/03_migrations.sh führt alle Migrationen auch
+-- beim ersten Start aus.
+-- ---------------------------------------------------------------------------
+CREATE TABLE lexoffice_exports (
+    id               SERIAL PRIMARY KEY,
+    month            TEXT NOT NULL,              -- 'YYYY-MM' (deutsche Zeit)
+    version          INTEGER NOT NULL DEFAULT 1,
+    file_name        TEXT NOT NULL,
+    csv              TEXT NOT NULL,              -- Dateiinhalt, unverändert
+    checksum         TEXT NOT NULL,              -- SHA-256 des Dateiinhalts
+    line_count       INTEGER NOT NULL,
+    total            NUMERIC(12,2) NOT NULL,     -- Summe aller Zeilen
+    proforma_number  TEXT,                       -- Proformarechnung der Erlöszeile
+    transaction_ids  TEXT[] NOT NULL,            -- enthaltene Etsy-Buchungen
+    report           JSONB NOT NULL,             -- Prüfbericht beim Erzeugen
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    confirmed_at     TIMESTAMPTZ,                -- Import in Lexoffice bestätigt
+    superseded_at    TIMESTAMPTZ,                -- durch neuere Version ersetzt
+    UNIQUE (month, version)
+);
+CREATE UNIQUE INDEX idx_lexoffice_exports_current
+    ON lexoffice_exports (month) WHERE superseded_at IS NULL;
 
 -- ---------------------------------------------------------------------------
 -- invoice_counter

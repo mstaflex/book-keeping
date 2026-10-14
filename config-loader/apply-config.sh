@@ -10,8 +10,9 @@
 #   ETSY_API_KEY        → ('etsy',    'api_key')
 #   ETSY_RC_START_DATE  → ('etsy_rc', 'start_date')
 #   SELLER_VAT_ID       → ('seller',  'vat_id')
-# Berücksichtigt werden nur die Präfixe ETSY_RC_, ETSY_, NOTION_, MAIL_ und
-# SELLER_ – und nur Variablen, die docker-compose.yml an den Container
+#   LEXOFFICE_START_MONTH → ('lexoffice', 'start_month')
+# Berücksichtigt werden nur die Präfixe ETSY_RC_, ETSY_, NOTION_, MAIL_,
+# SELLER_ und LEXOFFICE_ – und nur Variablen, die docker-compose.yml an den Container
 # durchreicht. Leere Variablen werden übersprungen, der Wert in der Datenbank
 # bleibt dann unverändert.
 #
@@ -46,7 +47,7 @@ fi
 set --
 sql=""
 n=0
-for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER)_[A-Z0-9_]+=' | tr -d '=' | sort -u); do
+for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER|LEXOFFICE)_[A-Z0-9_]+=' | tr -d '=' | sort -u); do
   value="$(printenv "$name" || true)"
   [ -n "$value" ] || continue
   case "$name" in
@@ -55,6 +56,7 @@ for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER)_[A-Z0-9_]+=' 
     NOTION_*)  scope=notion;  key=${name#NOTION_} ;;
     MAIL_*)    scope=mail;    key=${name#MAIL_} ;;
     SELLER_*)  scope=seller;  key=${name#SELLER_} ;;
+    LEXOFFICE_*) scope=lexoffice; key=${name#LEXOFFICE_} ;;
   esac
   key=$(printf '%s' "$key" | tr 'A-Z' 'a-z')
   n=$((n + 1))
@@ -84,6 +86,8 @@ m=$(missing 'etsy.api_key etsy.shop_id notion.database_id mail.from mail.to sell
 [ -z "$m" ] || log "fehlt noch: $m"
 m=$(missing 'seller.vat_id etsy_rc.recipient_name etsy_rc.recipient_street etsy_rc.recipient_city etsy_rc.recipient_country etsy_rc.recipient_vat_id etsy_rc.start_date')
 [ -z "$m" ] || log "fehlt noch für Workflow 05 (Reverse Charge): $m"
+m=$(missing 'lexoffice.start_month')
+[ -z "$m" ] || log "fehlt noch für Workflow 06 (Lexoffice-Export): $m"
 
 log "fertig – Leerlauf bis zum nächsten Start"
 exec sleep 2147483647

@@ -16,7 +16,7 @@ README (Schritte 2 und 5, „Updates einspielen“, „Datensicherung“).
 
 | Zustand | Ort | Lebensdauer |
 |---|---|---|
-| Bestellungen, Transaktionen, Rechnungen, Nummernkreis, `app_config` | PostgreSQL im Volume `bookkeeping_pgdata` | Bis `docker volume rm bookkeeping_pgdata` |
+| Bestellungen, Transaktionen, Rechnungen, Nummernkreis, Lexoffice-Exporte, `app_config` | PostgreSQL im Volume `bookkeeping_pgdata` | Bis `docker volume rm bookkeeping_pgdata` |
 | DB-Name, Admin- und Worker-Zugang | Dateien im Volume `bookkeeping_secrets`, geschrieben von `bootstrap` beim ersten Start | Bis `docker volume rm bookkeeping_secrets` |
 | Instanz-Konfiguration (Etsy-API-Key, IDs, Verkaeufer- und Mail-Daten, Empfaenger der Etsy-Rechnung) | Umgebungsvariablen des Compose-Projekts (Hosting-Panel oder `.env` neben der `docker-compose.yml`); Kopie in `app_config` | Quelle bleibt beim Projekt; die Kopie wird bei jedem Start erneuert |
 | Logins fuer Etsy (OAuth2), Notion, SMTP, Postgres | Credential-Speicher von n8n | Unabhaengig von diesem Stack |
@@ -71,6 +71,7 @@ README (Schritte 2 und 5, „Updates einspielen“, „Datensicherung“).
 | `NOTION_` | `notion` | `NOTION_DATABASE_ID` → `notion.database_id` |
 | `MAIL_` | `mail` | `MAIL_FROM` → `mail.from` |
 | `SELLER_` | `seller` | `SELLER_VAT_ID` → `seller.vat_id` |
+| `LEXOFFICE_` | `lexoffice` | `LEXOFFICE_START_MONTH` → `lexoffice.start_month` |
 
 Im Container kommen nur Variablen an, die in `docker-compose.yml` beim Service
 `config` aufgefuehrt sind. Eine Variable, die nur im Panel oder in der `.env`

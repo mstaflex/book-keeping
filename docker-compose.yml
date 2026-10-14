@@ -97,6 +97,7 @@ services:
       ETSY_RC_START_DATE:        ${ETSY_RC_START_DATE:-}
       ETSY_RC_PAYMENT_NOTE:      ${ETSY_RC_PAYMENT_NOTE:-}
       ETSY_RC_NOTE:              ${ETSY_RC_NOTE:-}
+      LEXOFFICE_START_MONTH:     ${LEXOFFICE_START_MONTH:-}
     networks:
       - n8n-backend
 
