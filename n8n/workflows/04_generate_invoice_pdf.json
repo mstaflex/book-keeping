@@ -18,8 +18,10 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH bumped AS (\n  INSERT INTO invoice_counter (year, last_nr)\n  SELECT EXTRACT(YEAR FROM NOW())::INTEGER, 1\n  WHERE EXISTS (\n    SELECT 1 FROM orders\n    WHERE order_id = '{{$json.body.order_id}}'\n      AND (invoice_number IS NULL OR invoice_number = '')\n  )\n  ON CONFLICT (year) DO UPDATE SET last_nr = invoice_counter.last_nr + 1\n  RETURNING year::TEXT || '-' || LPAD(last_nr::TEXT, 4, '0') AS new_invoice_number\n)\nUPDATE orders\nSET invoice_number = (SELECT new_invoice_number FROM bumped)\nWHERE order_id = '{{$json.body.order_id}}'\n  AND (invoice_number IS NULL OR invoice_number = '')\n  AND EXISTS (SELECT 1 FROM bumped);",
-        "options": {}
+        "query": "-- Vergibt die nächste Rechnungsnummer, falls die Bestellung noch keine hat.\n-- FOR UPDATE sperrt die Bestellzeile: ein paralleler Aufruf für dieselbe\n-- Bestellung wartet und sieht danach die vergebene Nummer, statt den\n-- Zähler ein zweites Mal hochzuzählen (Lücke im Nummernkreis).\n-- Order-ID kommt als Query-Parameter $1, nie per String-Einbau ins SQL.\nWITH target AS (\n  SELECT order_id FROM orders\n  WHERE order_id = $1\n    AND (invoice_number IS NULL OR invoice_number = '')\n    -- Rein digitale Bestellungen bekommen keine Kundenrechnung (→ Workflow 05)\n    AND EXISTS (SELECT 1 FROM jsonb_array_elements(items_json) i\n                WHERE NOT COALESCE((i->>'is_digital')::boolean, false))\n  FOR UPDATE\n), bumped AS (\n  INSERT INTO invoice_counter (year, last_nr)\n  SELECT EXTRACT(YEAR FROM NOW() AT TIME ZONE 'Europe/Berlin')::INTEGER, 1\n  FROM target\n  ON CONFLICT (year) DO UPDATE SET last_nr = invoice_counter.last_nr + 1\n  RETURNING year::TEXT || '-' || LPAD(last_nr::TEXT, 4, '0') AS new_invoice_number\n)\nUPDATE orders\nSET invoice_number = bumped.new_invoice_number\nFROM bumped\nWHERE orders.order_id = $1;",
+        "options": {
+          "queryReplacement": "={{ [String($json.body?.order_id ?? '')] }}"
+        }
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000008",
       "name": "Rechnungsnummer zuweisen",
@@ -33,27 +35,30 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  o.order_id,\n  o.order_date,\n  o.buyer_name,\n  o.buyer_street,\n  o.buyer_city,\n  o.buyer_zip,\n  o.buyer_country,\n  o.items_json,\n  o.subtotal,\n  o.shipping_cost,\n  o.total,\n  o.currency,\n  o.invoice_number,\n  o.tracking_number,\n  o.carrier\nFROM orders AS o\nWHERE order_id = '{{$('Webhook: Order-ID empfangen').item.json.body.order_id}}'\nLIMIT 1;",
-        "options": {}
+        "query": "SELECT\n  o.order_id,\n  o.order_date,\n  o.buyer_name,\n  o.buyer_street,\n  o.buyer_city,\n  o.buyer_zip,\n  o.buyer_country,\n  o.items_json,\n  o.subtotal,\n  o.shipping_cost,\n  o.total,\n  o.currency,\n  o.invoice_number,\n  o.tracking_number,\n  o.carrier,\n  (SELECT jsonb_object_agg(c.key, c.value)\n     FROM app_config c WHERE c.scope = 'seller') AS seller_config,\n  (SELECT jsonb_object_agg(c.key, c.value)\n     FROM app_config c WHERE c.scope = 'mail')   AS mail_config\nFROM orders AS o\nWHERE o.order_id = $1\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [String($('Webhook: Order-ID empfangen').first().json.body?.order_id ?? '')] }}"
+        }
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000002",
       "name": "Order aus DB holen",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [620, 300],
+      "alwaysOutputData": true,
+      "position": [680, 300],
       "credentials": {
         "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
       }
     },
     {
       "parameters": {
-        "jsCode": "// Seller-Stammdaten (einmalig pflegen, kommen nicht aus der DB)\n// Anpassen!\nconst SELLER = {\n  name:            \"Max Mustermann\",\n  business_name:   \"Mein Shop\",\n  street:          \"Musterstraße 1\",\n  zip:             \"80331\",\n  city:            \"München\",\n  country:         \"Deutschland\",\n  email:           \"shop@example.org\",\n  iban:            \"DE89 3704 0044 0532 0130 00\",\n  bank_name:       \"Commerzbank\",\n  tax_id:          \"123/456/78901\",\n  kleinunternehmer: true,\n};\n\nconst o = $input.item.json;\nconst items = Array.isArray(o.items_json)\n  ? o.items_json\n  : JSON.parse(o.items_json ?? '[]');\n\n// Artikel für API formatieren\nconst lineItems = items.map((it, i) => ({\n  pos:        i + 1,\n  description: it.title,\n  quantity:    it.quantity,\n  unit_price:  it.price,\n  total:       it.price * it.quantity,\n}));\n\nconst buyer = {\n  name:    o.buyer_name,\n  street:  o.buyer_street,\n  zip:     o.buyer_zip,\n  city:    o.buyer_city,\n  country: o.buyer_country,\n};\n\nconst invoiceDate = new Date(o.order_date)\n  .toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });\n\nreturn {\n  json: {\n    // Rechnungsrequest\n    invoice_request: {\n      invoice_number: o.invoice_number,\n      invoice_date:   invoiceDate,\n      order_id:       o.order_id,\n      seller:         SELLER,\n      buyer,\n      items:          lineItems,\n      subtotal:       o.subtotal,\n      shipping_cost:  o.shipping_cost,\n      total:          o.total,\n      currency:       o.currency,\n      payment_note:   \"Bereits bezahlt via Etsy Payments\",\n    },\n    // Lieferscheinrequest\n    delivery_request: {\n      delivery_number: \"LS-\" + o.invoice_number,\n      date:            invoiceDate,\n      order_id:        o.order_id,\n      seller:          SELLER,\n      buyer,\n      items:           lineItems,\n      tracking_number: o.tracking_number,\n      carrier:         o.carrier,\n    },\n    order_id: o.order_id,\n  }\n};\n"
+        "jsCode": "const o = $input.first().json;\nif (!o.order_id) {\n  const id = $('Webhook: Order-ID empfangen').first().json.body?.order_id;\n  throw new Error(`Bestellung '${id ?? ''}' nicht in der Datenbank gefunden`);\n}\nconst items = Array.isArray(o.items_json)\n  ? o.items_json\n  : JSON.parse(o.items_json ?? '[]');\n\n// Digitale Artikel verkauft Etsy als Plattform selbst an den Käufer\n// (Art. 9a MwSt-DVO). Sie werden monatlich per Reverse-Charge-Rechnung an\n// Etsy abgerechnet (Workflow 05) und gehören nicht auf die Kundenrechnung –\n// sonst stünde derselbe Umsatz zweimal in den Büchern.\nconst physical = items.filter(it => !it.is_digital);\nif (!physical.length) {\n  throw new Error(`Bestellung ${o.order_id} enthält nur digitale Artikel – diese werden über die `\n    + `monatliche Reverse-Charge-Rechnung an Etsy abgerechnet (Workflow 05), nicht an den Käufer`);\n}\n\nif (!o.invoice_number) {\n  throw new Error(`Bestellung ${o.order_id} hat keine Rechnungsnummer`);\n}\n\n// Seller-Stammdaten kommen aus app_config (scope 'seller'), siehe README §5.\n// Nicht hier im Code pflegen: ein Re-Import des Workflows würde echte Daten\n// sonst wieder durch Platzhalter (Muster-IBAN, Muster-Steuernummer) ersetzen.\nconst cfg = o.seller_config ?? {};\nconst missing = ['name', 'street', 'zip', 'city'].filter(k => !cfg[k]);\nif (missing.length) {\n  throw new Error(`Verkäuferdaten fehlen in app_config (scope 'seller'): ${missing.join(', ')}`);\n}\n// Absender/Empfänger der PDF-Mail ebenfalls aus app_config (scope 'mail')\nconst mail = o.mail_config ?? {};\nif (!mail.from || !mail.to) {\n  throw new Error(\"Mail-Adressen fehlen in app_config (scope 'mail'): from, to\");\n}\n\nconst SELLER = {\n  name:             cfg.name,\n  business_name:    cfg.business_name ?? null,\n  tagline:          cfg.tagline ?? null,\n  street:           cfg.street,\n  zip:              cfg.zip,\n  city:             cfg.city,\n  country:          cfg.country ?? null,\n  email:            cfg.email ?? null,\n  phone:            cfg.phone ?? null,\n  website:          cfg.website ?? null,\n  iban:             cfg.iban ?? null,\n  bank_name:        cfg.bank_name ?? null,\n  tax_id:           cfg.tax_id ?? null,\n  vat_id:           cfg.vat_id ?? null,\n  kleinunternehmer: String(cfg.kleinunternehmer ?? 'true').toLowerCase() !== 'false',\n};\n\n// Etsy liefert Titel HTML-kodiert (&#39;, &quot;, &amp;) – ältere DB-Zeilen\n// enthalten das noch, daher hier ebenfalls dekodieren.\nconst decodeHtml = (s) => s == null ? s : String(s)\n  .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n  .replace(/&quot;/g, '\"').replace(/&apos;/g, \"'\")\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&amp;/g, '&');\n\n// NUMERIC-Spalten kommen aus Postgres als String (\"12.50\")\nconst round2 = (n) => Math.round(Number(n) * 100) / 100;\n\nconst lineTotal = (it) => round2(Number(it.price) * Number(it.quantity));\n\n// Artikel für API formatieren (nur physische, s.o.)\nconst lineItems = physical.map((it, i) => ({\n  pos:         i + 1,\n  description: decodeHtml(it.title) ?? 'Artikel',\n  quantity:    Number(it.quantity),\n  unit_price:  Number(it.price),\n  total:       lineTotal(it),\n}));\n\n// Etsy-Gutscheine stecken nur in receipt.subtotal (= Artikelsumme − Rabatt).\n// Rabatt anteilig verteilen (bei gemischten Bestellungen entfällt der Rest auf\n// die digitalen Artikel, Workflow 05 rechnet identisch) und als Rabattzeile\n// ausweisen, sonst geht die Rechnung nicht auf.\nconst allSum       = round2(items.reduce((sum, it) => sum + lineTotal(it), 0));\nconst factor       = o.subtotal != null && allSum > 0 ? Number(o.subtotal) / allSum : 1;\nconst itemsSum     = round2(lineItems.reduce((sum, it) => sum + it.total, 0));\nconst subtotal     = round2(itemsSum * factor);\nconst shippingCost = round2(o.shipping_cost ?? 0);\nconst discount     = Math.max(0, round2(itemsSum - subtotal));\n\nconst buyer = {\n  name:    o.buyer_name ?? '',\n  street:  o.buyer_street,\n  zip:     o.buyer_zip,\n  city:    o.buyer_city,\n  country: o.buyer_country,\n};\n\n// Kalenderdatum in deutscher Zeit – n8n läuft meist in UTC, sonst rutschen\n// Bestellungen zwischen 0 und 2 Uhr auf den Vortag.\nconst invoiceDate = new Date(o.order_date).toLocaleDateString('de-DE', {\n  day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Berlin',\n});\n\nreturn {\n  json: {\n    // Rechnungsrequest\n    invoice_request: {\n      invoice_number: o.invoice_number,\n      invoice_date:   invoiceDate,\n      order_id:       o.order_id,\n      seller:         SELLER,\n      buyer,\n      items:          lineItems,\n      subtotal,\n      shipping_cost:  shippingCost,\n      discount,\n      total:          round2(subtotal + shippingCost),\n      currency:       o.currency ?? 'EUR',\n      payment_note:   \"Bereits bezahlt via Etsy Payments\",\n    },\n    // Lieferscheinrequest\n    delivery_request: {\n      delivery_number: \"LS-\" + o.invoice_number,\n      date:            invoiceDate,\n      order_id:        o.order_id,\n      seller:          SELLER,\n      buyer,\n      items:           lineItems,\n      tracking_number: o.tracking_number,\n      carrier:         o.carrier,\n    },\n    order_id: o.order_id,\n    mail:     { from: mail.from, to: mail.to },\n  }\n};\n"
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000003",
       "name": "Request-Bodies aufbauen",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [680, 300]
+      "position": [900, 300]
     },
     {
       "parameters": {
@@ -76,7 +81,7 @@
       "name": "Rechnung generieren",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [900, 200]
+      "position": [1120, 200]
     },
     {
       "parameters": {
@@ -99,7 +104,7 @@
       "name": "Lieferschein generieren",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [900, 380]
+      "position": [1120, 400]
     },
     {
       "parameters": {
@@ -111,25 +116,25 @@
       "name": "PDFs zusammenfuehren",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1120, 300]
+      "position": [1340, 300]
     },
     {
       "parameters": {
-        "jsCode": "// Binary-Anhaenge explizit von beiden Branches einsammeln.\n// Die Merge-Node (combineByPosition) verschmilzt zuverlaessig nur json,\n// nicht zwingend beide binary-Properties.\nreturn [{\n  json: $('Request-Bodies aufbauen').item.json,\n  binary: {\n    invoice_pdf:  $('Rechnung generieren').item.binary.invoice_pdf,\n    delivery_pdf: $('Lieferschein generieren').item.binary.delivery_pdf,\n  },\n}];\n"
+        "jsCode": "// Binary-Anhaenge explizit von beiden Branches einsammeln.\n// Die Merge-Node (combineByPosition) verschmilzt zuverlaessig nur json,\n// nicht zwingend beide binary-Properties.\n// .first() statt .item: Ein Webhook-Aufruf = genau ein Item, und so muss\n// n8n keine Paired-Item-Kette durch die Merge-Node aufloesen.\nreturn [{\n  json: $('Request-Bodies aufbauen').first().json,\n  binary: {\n    invoice_pdf:  $('Rechnung generieren').first().binary.invoice_pdf,\n    delivery_pdf: $('Lieferschein generieren').first().binary.delivery_pdf,\n  },\n}];\n"
       },
       "id": "d4e5f6a7-0004-0004-0004-00000000000b",
       "name": "Anhaenge zusammenstellen",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1210, 300]
+      "position": [1560, 300]
     },
     {
       "parameters": {
-        "fromEmail": "shop@example.org",
-        "toEmail": "buchhaltung@example.org",
-        "subject": "=Rechnung {{$('Request-Bodies aufbauen').item.json.invoice_request.invoice_number}} - Bestellung {{$('Request-Bodies aufbauen').item.json.order_id}}",
+        "fromEmail": "={{ $json.mail.from }}",
+        "toEmail": "={{ $json.mail.to }}",
+        "subject": "=Rechnung {{ $json.invoice_request.invoice_number }} - Bestellung {{ $json.order_id }}",
         "emailFormat": "text",
-        "text": "=Anbei Rechnung und Lieferschein fuer Bestellung {{$('Request-Bodies aufbauen').item.json.order_id}}.",
+        "text": "=Anbei Rechnung und Lieferschein fuer Bestellung {{ $json.order_id }}.",
         "options": {
           "attachments": "invoice_pdf,delivery_pdf"
         }
@@ -138,7 +143,7 @@
       "name": "Per E-Mail senden",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
-      "position": [1300, 300],
+      "position": [1780, 300],
       "credentials": {
         "smtp": { "id": "SMTP_CREDENTIAL_ID", "name": "smtp" }
       }
@@ -146,14 +151,16 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE orders\nSET invoice_path = '/pdfs/Rechnung_{{$('Request-Bodies aufbauen').item.json.order_id}}.pdf'\nWHERE order_id = '{{$('Request-Bodies aufbauen').item.json.order_id}}';",
-        "options": {}
+        "query": "UPDATE orders\nSET invoice_path = '/pdfs/Rechnung_' || $1 || '.pdf'\nWHERE order_id = $1;",
+        "options": {
+          "queryReplacement": "={{ [$('Anhaenge zusammenstellen').first().json.order_id] }}"
+        }
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000006",
       "name": "invoice_path in DB speichern",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1480, 300],
+      "position": [2000, 300],
       "credentials": {
         "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
       }
@@ -161,13 +168,13 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "{\"status\": \"ok\", \"order_id\": \"{{$('Request-Bodies aufbauen').item.json.order_id}}\"}"
+        "responseBody": "={{ JSON.stringify({ status: 'ok', order_id: $('Anhaenge zusammenstellen').first().json.order_id, invoice_number: $('Anhaenge zusammenstellen').first().json.invoice_request.invoice_number }) }}"
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000007",
       "name": "Webhook Response",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1660, 300]
+      "position": [2220, 300]
     }
   ],
   "connections": {

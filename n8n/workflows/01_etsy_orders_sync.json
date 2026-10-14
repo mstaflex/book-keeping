@@ -16,7 +16,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'api_key')  AS api_key,\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'shop_id') AS shop_id,\n  COALESCE(MAX(o.order_date), NOW() - INTERVAL '24 hours')                AS last_sync\nFROM orders o\nWHERE o.source = 'etsy';",
+        "query": "SELECT\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'api_key')  AS api_key,\n  (SELECT value FROM app_config WHERE scope = 'etsy' AND key = 'shop_id') AS shop_id,\n  -- Cursor = updated_timestamp (Etsy-Zeit) des zuletzt verarbeiteten Receipts.\n  -- Ohne Cursor (Erstlauf / Upgrade): jüngste Bestellung, sonst letzte 24h.\n  COALESCE(\n    (SELECT value::BIGINT FROM app_config WHERE scope = 'etsy' AND key = 'receipts_cursor'),\n    EXTRACT(EPOCH FROM COALESCE(MAX(o.order_date), NOW() - INTERVAL '24 hours'))::BIGINT\n  ) AS cursor_ts\nFROM orders o\nWHERE o.source = 'etsy';",
         "options": {}
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000002",
@@ -42,9 +42,11 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "min_created", "value": "={{Math.floor(new Date($json.last_sync).getTime() / 1000)}}" },
-            { "name": "limit",       "value": "100" },
-            { "name": "was_paid",    "value": "true" }
+            { "name": "min_last_modified", "value": "={{ $json.cursor_ts }}" },
+            { "name": "sort_on",           "value": "updated" },
+            { "name": "sort_order",        "value": "asc" },
+            { "name": "limit",             "value": "100" },
+            { "name": "was_paid",          "value": "true" }
           ]
         },
         "options": { "response": { "response": { "fullResponse": false } } }
@@ -81,7 +83,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Etsy Receipt → orders-Schema transformieren\n// Gibt eine flache Liste zurück; ein nachgelagerter IF-Node trennt\n// erlaubte Währungen (→ upsert) von unerwarteten (→ Stop & Error).\n\nconst ALLOWED_CURRENCIES = new Set(['EUR']);\n\nconst results = $input.all()[0]?.json.results ?? [];\n\nconst money = (obj) => obj ? (obj.amount / obj.divisor) : null;\n\nconst statusMap = {\n  'paid':      'paid',\n  'open':      'paid',\n  'completed': 'completed',\n  'shipped':   'shipped',\n  'canceled':  'cancelled',\n};\n\nconst orders = [];\n\nfor (const r of results) {\n  const currency = r.grandtotal?.currency_code\n                ?? r.total_price?.currency_code\n                ?? r.subtotal?.currency_code\n                ?? r.currency_code\n                ?? 'UNKNOWN';\n\n  const items = (r.transactions ?? []).map(t => ({\n    listing_id: t.listing_id,\n    title:      t.title,\n    quantity:   t.quantity,\n    price:      money(t.price),\n    is_digital: t.is_digital ?? false,\n  }));\n\n  orders.push({\n    json: {\n      order_id:      String(r.receipt_id),\n      source:        'etsy',\n      order_date:    new Date(r.created_timestamp * 1000).toISOString(),\n      buyer_name:    r.name ?? null,\n      buyer_email:   r.buyer_email ?? null,\n      buyer_street:  r.first_line ?? null,\n      buyer_city:    r.city ?? null,\n      buyer_zip:     r.zip ?? null,\n      buyer_country: r.country_iso ?? null,\n      items_json:    JSON.stringify(items),\n      subtotal:      money(r.subtotal),\n      shipping_cost: money(r.total_shipping_cost),\n      total:         money(r.grandtotal),\n      currency,\n      status:        statusMap[r.status] ?? 'paid',\n      is_digital:    items.every(i => i.is_digital),\n      currency_allowed: ALLOWED_CURRENCIES.has(currency),\n    }\n  });\n}\n\nreturn orders;\n"
+        "jsCode": "// Etsy Receipt → orders-Schema transformieren\n// Gibt eine flache Liste zurück; ein nachgelagerter IF-Node trennt\n// erlaubte Währungen (→ upsert) von unerwarteten (→ Stop & Error).\n\nconst ALLOWED_CURRENCIES = new Set(['EUR']);\n\nconst results = $input.all()[0]?.json.results ?? [];\n\nconst money = (obj) => obj ? (obj.amount / obj.divisor) : null;\n\n// Etsy liefert Texte HTML-kodiert (\"Mother&#39;s Day\") – sonst landet das\n// so auf Rechnung, Lieferschein und in Notion.\nconst decodeHtml = (s) => s == null ? null : String(s)\n  .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n  .replace(/&quot;/g, '\"').replace(/&apos;/g, \"'\")\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&amp;/g, '&');\n\n// Etsy-Status kommt je nach Endpoint groß- oder kleingeschrieben\n// (\"Paid\", \"Completed\") → lowercase vergleichen.\nconst statusMap = {\n  'paid':               'paid',\n  'open':               'paid',\n  'payment processing': 'paid',\n  'completed':          'completed',\n  'shipped':            'shipped',\n  'canceled':           'cancelled',\n  'cancelled':          'cancelled',\n  'fully refunded':     'cancelled',\n};\n\nconst orders = [];\n\nfor (const r of results) {\n  const currency = r.grandtotal?.currency_code\n                ?? r.total_price?.currency_code\n                ?? r.subtotal?.currency_code\n                ?? r.currency_code\n                ?? 'UNKNOWN';\n\n  const items = (r.transactions ?? []).map(t => ({\n    listing_id: t.listing_id,\n    title:      decodeHtml(t.title),\n    quantity:   t.quantity,\n    price:      money(t.price),\n    is_digital: t.is_digital ?? false,\n  }));\n\n  // Zweite Adresszeile (Hinterhaus, c/o, Apartment) gehört auf den\n  // Lieferschein; \"\\n\" wird in den Typst-Templates als Zeilenumbruch gesetzt.\n  const street = [r.first_line, r.second_line]\n    .map(decodeHtml)\n    .filter(Boolean)\n    .join('\\n') || null;\n\n  // Letzte Sendung mit Trackingnummer (wird beim Versand in Etsy erfasst)\n  const shipment = (r.shipments ?? []).filter(s => s.tracking_code).at(-1);\n\n  orders.push({\n    json: {\n      order_id:      String(r.receipt_id),\n      source:        'etsy',\n      order_date:    new Date(r.created_timestamp * 1000).toISOString(),\n      buyer_name:    decodeHtml(r.name),\n      buyer_email:   r.buyer_email ?? null,\n      buyer_street:  street,\n      buyer_city:    decodeHtml(r.city),\n      buyer_zip:     r.zip ?? null,\n      buyer_country: r.country_iso ?? null,\n      items_json:    JSON.stringify(items),\n      subtotal:      money(r.subtotal),\n      shipping_cost: money(r.total_shipping_cost),\n      total:         money(r.grandtotal),\n      currency,\n      status:        statusMap[String(r.status ?? '').toLowerCase()]\n                       ?? (r.is_shipped ? 'completed' : 'paid'),\n      is_digital:    items.every(i => i.is_digital),\n      tracking_number: shipment?.tracking_code ?? null,\n      carrier:         shipment ? decodeHtml(shipment.carrier_name) : null,\n      currency_allowed: ALLOWED_CURRENCIES.has(currency),\n      // Für den Sync-Cursor (min_last_modified beim nächsten Lauf)\n      etsy_updated_ts: r.updated_timestamp ?? r.update_timestamp ?? r.created_timestamp,\n    }\n  });\n}\n\nreturn orders;\n"
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000005",
       "name": "Receipt → Order transformieren",
@@ -122,14 +124,34 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO orders (\n  order_id, source, order_date,\n  buyer_name, buyer_email,\n  buyer_street, buyer_city, buyer_zip, buyer_country,\n  items_json,\n  subtotal, shipping_cost, total, currency,\n  status, is_digital\n) VALUES (\n  '{{$json.order_id}}', '{{$json.source}}', '{{$json.order_date}}',\n  {{$json.buyer_name    ? `'${$json.buyer_name.replace(/'/g, \"''\")}'`    : 'NULL'}},\n  {{$json.buyer_email   ? `'${$json.buyer_email.replace(/'/g, \"''\")}'`   : 'NULL'}},\n  {{$json.buyer_street  ? `'${$json.buyer_street.replace(/'/g, \"''\")}'`  : 'NULL'}},\n  {{$json.buyer_city    ? `'${$json.buyer_city.replace(/'/g, \"''\")}'`    : 'NULL'}},\n  {{$json.buyer_zip     ? `'${$json.buyer_zip.replace(/'/g, \"''\")}'`     : 'NULL'}},\n  {{$json.buyer_country ? `'${$json.buyer_country.replace(/'/g, \"''\")}'` : 'NULL'}},\n  '{{$json.items_json}}'::jsonb,\n  {{$json.subtotal ?? 'NULL'}}, {{$json.shipping_cost ?? 'NULL'}},\n  {{$json.total ?? 'NULL'}}, '{{$json.currency}}',\n  '{{$json.status}}', {{$json.is_digital}}\n)\nON CONFLICT (order_id) DO UPDATE SET\n  status        = EXCLUDED.status,\n  items_json    = EXCLUDED.items_json,\n  subtotal      = EXCLUDED.subtotal,\n  shipping_cost = EXCLUDED.shipping_cost,\n  total         = EXCLUDED.total,\n  updated_at    = NOW()\nWHERE orders.status != 'completed';",
-        "options": {}
+        "query": "-- Werte als Query-Parameter ($1..$18): Ein Apostroph im Artikeltitel\n-- (\"Mother's Day\") hat das per String-Einbau gebaute SQL zerlegt und damit\n-- den gesamten Sync blockiert.\nINSERT INTO orders (\n  order_id, source, order_date,\n  buyer_name, buyer_email,\n  buyer_street, buyer_city, buyer_zip, buyer_country,\n  items_json,\n  subtotal, shipping_cost, total, currency,\n  status, is_digital, tracking_number, carrier\n) VALUES (\n  $1, $2, $3::timestamptz,\n  $4, $5,\n  $6, $7, $8, $9,\n  $10::jsonb,\n  $11::numeric, $12::numeric, $13::numeric, $14,\n  $15, $16::boolean, $17, $18\n)\nON CONFLICT (order_id) DO UPDATE SET\n  status          = EXCLUDED.status,\n  items_json      = EXCLUDED.items_json,\n  subtotal        = EXCLUDED.subtotal,\n  shipping_cost   = EXCLUDED.shipping_cost,\n  total           = EXCLUDED.total,\n  tracking_number = COALESCE(EXCLUDED.tracking_number, orders.tracking_number),\n  carrier         = COALESCE(EXCLUDED.carrier, orders.carrier),\n  updated_at      = NOW()\n-- Nur bei echten Änderungen schreiben, sonst gilt die Bestellung bei jedem\n-- Lauf als geändert und der Notion-Sync aktualisiert sie immer wieder.\nWHERE (orders.status, orders.items_json, orders.subtotal, orders.shipping_cost,\n       orders.total, orders.tracking_number, orders.carrier)\n      IS DISTINCT FROM\n      (EXCLUDED.status, EXCLUDED.items_json, EXCLUDED.subtotal, EXCLUDED.shipping_cost,\n       EXCLUDED.total, COALESCE(EXCLUDED.tracking_number, orders.tracking_number),\n       COALESCE(EXCLUDED.carrier, orders.carrier));",
+        "options": {
+          "queryReplacement": "={{ [$json.order_id, $json.source, $json.order_date, $json.buyer_name, $json.buyer_email, $json.buyer_street, $json.buyer_city, $json.buyer_zip, $json.buyer_country, $json.items_json, $json.subtotal, $json.shipping_cost, $json.total, $json.currency, $json.status, $json.is_digital, $json.tracking_number, $json.carrier].map(v => v ?? null) }}"
+        }
       },
       "id": "a1b2c3d4-0001-0001-0001-000000000006",
       "name": "Order upsert in PostgreSQL",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1560, 220],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Läuft erst nach erfolgreichem Upsert: schlägt der fehl, bleibt der Cursor\n-- stehen und dieselben Receipts werden beim nächsten Lauf erneut geholt.\n-- Fremdwährungs-Receipts zählen mit, damit deren Warnung nur einmal kommt.\nINSERT INTO app_config (scope, key, value)\nVALUES ('etsy', 'receipts_cursor', $1)\nON CONFLICT (scope, key) DO UPDATE\nSET value = GREATEST(app_config.value::BIGINT, EXCLUDED.value::BIGINT)::TEXT;",
+        "options": {
+          "queryReplacement": "={{ [String(Math.max(...$('Receipt → Order transformieren').all().map(i => Number(i.json.etsy_updated_ts) || 0)))] }}"
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000009",
+      "name": "Sync-Cursor speichern",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1780, 220],
+      "executeOnce": true,
       "credentials": {
         "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
       }
@@ -159,6 +181,9 @@
         [{ "node": "Order upsert in PostgreSQL",  "type": "main", "index": 0 }],
         [{ "node": "Warnung: Unbekannte Währung", "type": "main", "index": 0 }]
       ]
+    },
+    "Order upsert in PostgreSQL": {
+      "main": [[{ "node": "Sync-Cursor speichern", "type": "main", "index": 0 }]]
     }
   },
   "active": false,

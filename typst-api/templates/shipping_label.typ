@@ -7,6 +7,9 @@
 #let to   = d.recipient
 
 #let addr-line(v) = if v != none and v != "" { v + linebreak() }
+#let present(parts) = parts.filter(p => p != none and p != "")
+// Einzeilige Absenderzeile ohne leere " · "-Trenner bei fehlenden Feldern
+#let one-line(a) = present((a.name, a.street, present((a.zip, a.city)).join(" "), a.country)).join(" · ")
 
 #set page(
   width:  148mm,
@@ -25,7 +28,7 @@
   radius:  2pt,
 )[
   #text(size: 7pt, fill: luma(80))[
-    VON: #from.name · #from.street · #from.zip #from.city · #from.country
+    VON: #one-line(from)
   ]
 ]
 

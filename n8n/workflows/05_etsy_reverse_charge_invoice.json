@@ -1,0 +1,229 @@
+{
+  "name": "05 · Etsy Reverse-Charge-Monatsrechnung (digitale Verkäufe)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "monthsInterval": 1,
+              "triggerAtDayOfMonth": 1,
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000001",
+      "name": "Monatlich am 1. um 6 Uhr",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 220]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "etsy-rc-invoice",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000002",
+      "name": "Webhook: Monat manuell",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 420],
+      "webhookId": "etsy-rc-invoice"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT jsonb_object_agg(key, value) FROM app_config WHERE scope = 'seller')  AS seller,\n  (SELECT jsonb_object_agg(key, value) FROM app_config WHERE scope = 'etsy_rc') AS etsy_rc,\n  (SELECT jsonb_object_agg(key, value) FROM app_config WHERE scope = 'mail')    AS mail;",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000003",
+      "name": "Konfiguration laden",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 320],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    },
+    {
+      "parameters": { "url": "http://typst-api:8080/health", "options": {} },
+      "id": "e5f6a7b8-0005-0005-0005-000000000012",
+      "name": "typst-api prüfen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Abrechnungsmonat bestimmen und Konfiguration prüfen.\n// Schedule (1. des Monats): Vormonat. Webhook: {\"month\": \"2026-09\"} zum\n// Nachholen oder erneuten Versenden; ohne Angabe ebenfalls der Vormonat.\nconst yearMonth = (d) => new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit',\n}).format(d);                                   // \"2026-10\"\nconst currentMonth = yearMonth(new Date());\n\nlet month = null;\nif ($('Webhook: Monat manuell').isExecuted) {\n  const req = $('Webhook: Monat manuell').first().json;\n  month = req.body?.month ?? req.query?.month ?? null;\n}\nif (!month) {\n  const [y, m] = currentMonth.split('-').map(Number);\n  month = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;\n}\nmonth = String(month).trim();\nif (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)) {\n  throw new Error(`Ungültiger Monat '${month}' – erwartet wird YYYY-MM`);\n}\nif (month >= currentMonth) {\n  throw new Error(`${month} ist noch nicht abgeschlossen – abgerechnet werden nur vergangene Monate`);\n}\n\n// Ein veraltetes typst-api-Image ignoriert reverse_charge und würde still\n// eine normale §19-Rechnung an Etsy erzeugen → vor dem Anlegen abbrechen.\nconst api = $('typst-api prüfen').first().json;\nif (!(api.features ?? []).includes('reverse_charge')) {\n  throw new Error('typst-api kennt keine Reverse-Charge-Rechnungen – Image neu bauen: '\n    + 'docker compose up -d --build typst-api');\n}\n\nconst cfg    = $('Konfiguration laden').first().json;\nconst seller = cfg.seller ?? {};\nconst rc     = cfg.etsy_rc ?? {};\nconst mail   = cfg.mail ?? {};\n// USt-IdNr. beider Seiten ist bei Reverse Charge Pflicht (§14a Abs. 1 UStG)\nconst missing = [\n  ...['name', 'street', 'zip', 'city', 'vat_id']\n      .filter(k => !seller[k]).map(k => `seller.${k}`),\n  ...['recipient_name', 'recipient_street', 'recipient_city', 'recipient_country',\n      'recipient_vat_id', 'start_date']\n      .filter(k => !rc[k]).map(k => `etsy_rc.${k}`),\n  ...['from', 'to'].filter(k => !mail[k]).map(k => `mail.${k}`),\n];\nif (missing.length) {\n  throw new Error(`Fehlende Konfiguration in app_config: ${missing.join(', ')} (siehe README)`);\n}\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(rc.start_date)) {\n  throw new Error(`etsy_rc.start_date '${rc.start_date}' – erwartet wird YYYY-MM-DD`);\n}\n\nconst pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? null]));\nreturn [{\n  json: {\n    month,\n    mail:       { from: mail.from, to: mail.to },\n    period:     `${month}-01`,\n    start_date: rc.start_date,\n    // Snapshots: werden mit der Rechnung gespeichert und beim Nachdruck verwendet\n    seller: {\n      ...pick(seller, ['name', 'business_name', 'tagline', 'street', 'zip', 'city', 'country',\n                       'email', 'phone', 'website', 'iban', 'bank_name', 'tax_id', 'vat_id']),\n      kleinunternehmer: String(seller.kleinunternehmer ?? 'true').toLowerCase() !== 'false',\n    },\n    recipient: {\n      name:    rc.recipient_name,\n      street:  rc.recipient_street,\n      zip:     rc.recipient_zip ?? null,\n      city:    rc.recipient_city,\n      country: rc.recipient_country,\n      vat_id:  rc.recipient_vat_id,\n    },\n    payment_note: rc.payment_note\n      ?? 'Verrechnet über das Etsy-Zahlungskonto (Etsy Payments).',\n    note: rc.note\n      ?? 'Digitale Artikel (elektronisch erbrachte Leistungen), über die Etsy-Plattform an '\n       + 'Endkunden verkauft. Etsy gilt dabei als leistender Unternehmer gegenüber dem '\n       + 'Endkunden (Art. 9a MwSt-DVO); abgerechnet wird der Verkaufspreis ohne die von '\n       + 'Etsy erhobene VAT.',\n  },\n}];\n"
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000004",
+      "name": "Monat & Konfiguration prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Legt die Monatsrechnung an (oder liefert die bestehende) – in EINEM\n-- Statement: Positionen ermitteln, Nummer ziehen, Snapshot speichern und die\n-- Bestellungen markieren passiert ganz oder gar nicht.\n-- Advisory-Lock: Laufen Schedule und manueller Webhook gleichzeitig, wartet\n-- der zweite und sieht danach die bereits angelegte Rechnung.\nDO $$ BEGIN PERFORM pg_advisory_xact_lock(hashtext('etsy_rc_invoices')); END $$;\n\nWITH params AS (\n  SELECT $1::date                              AS period,\n         ($1::date + INTERVAL '1 month')::date AS period_end,\n         $2::date                              AS start_date\n),\nexisting AS (\n  SELECT r.* FROM etsy_rc_invoices r JOIN params p ON r.period = p.period\n),\n-- Bestellungen mit mindestens einem digitalen Artikel, die noch auf keiner\n-- Etsy-Rechnung stehen. Nachzügler aus Vormonaten (z.B. nach einem n8n-\n-- Ausfall verspätet synchronisiert) landen so in der nächsten Rechnung,\n-- aber nie Bestellungen vor start_date (bis dahin manuell abgerechnet).\ncandidates AS (\n  SELECT o.order_id, o.order_date, o.subtotal, o.shipping_cost, o.total, o.items_json\n  FROM orders o, params p\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n    AND o.source = 'etsy'\n    AND o.status <> 'cancelled'\n    AND o.etsy_rc_invoice_number IS NULL\n    AND (o.order_date AT TIME ZONE 'Europe/Berlin')::date >= p.start_date\n    AND (o.order_date AT TIME ZONE 'Europe/Berlin')::date <  p.period_end\n    AND EXISTS (SELECT 1 FROM jsonb_array_elements(o.items_json) i\n                WHERE (i->>'is_digital')::boolean)\n  FOR UPDATE OF o\n),\nlines AS (\n  SELECT c.order_id,\n         (c.order_date AT TIME ZONE 'Europe/Berlin')::date AS sale_date,\n         x.titles,\n         -- Etsy-subtotal = Artikel nach Gutschein, OHNE VAT und Versand.\n         -- Gemischte Bestellungen: nur der digitale Anteil, Gutschein anteilig.\n         COALESCE(ROUND(x.digital_sum * COALESCE(c.subtotal, x.all_sum)\n                        / NULLIF(x.all_sum, 0), 2), 0)        AS net,\n         -- Von Etsy erhobene VAT/Steuer (nur zum Abgleich): Brutto − Waren − Versand\n         GREATEST(COALESCE(c.total - COALESCE(c.subtotal, x.all_sum)\n                           - COALESCE(c.shipping_cost, 0), 0), 0) AS marketplace_tax\n  FROM candidates c\n  CROSS JOIN LATERAL (\n    SELECT SUM((i->>'price')::numeric * (i->>'quantity')::numeric)\n             FILTER (WHERE (i->>'is_digital')::boolean)            AS digital_sum,\n           SUM((i->>'price')::numeric * (i->>'quantity')::numeric) AS all_sum,\n           string_agg(CASE WHEN (i->>'quantity')::numeric > 1\n                           THEN (i->>'quantity') || ' × ' ELSE '' END || (i->>'title'),\n                      ', ')\n             FILTER (WHERE (i->>'is_digital')::boolean)            AS titles\n    FROM jsonb_array_elements(c.items_json) i\n  ) x\n),\nsummary AS (\n  SELECT COUNT(*)                          AS order_count,\n         COALESCE(SUM(net), 0)             AS net_total,\n         COALESCE(SUM(marketplace_tax), 0) AS tax_total,\n         MIN(sale_date)                    AS first_sale,\n         jsonb_agg(jsonb_build_object(\n           'order_id', order_id, 'date', sale_date, 'titles', titles,\n           'net', net, 'marketplace_tax', marketplace_tax, 'gross', net + marketplace_tax)\n           ORDER BY sale_date, order_id)   AS lines\n  FROM lines\n),\n-- Gemeinsamer Nummernkreis mit den Kundenrechnungen (Workflow 04)\nbumped AS (\n  INSERT INTO invoice_counter (year, last_nr)\n  SELECT EXTRACT(YEAR FROM NOW() AT TIME ZONE 'Europe/Berlin')::INTEGER, 1\n  FROM summary WHERE order_count > 0\n  ON CONFLICT (year) DO UPDATE SET last_nr = invoice_counter.last_nr + 1\n  RETURNING year::TEXT || '-' || LPAD(last_nr::TEXT, 4, '0') AS invoice_number\n),\ncreated AS (\n  INSERT INTO etsy_rc_invoices (\n    period, invoice_number, invoice_date, service_from, service_to,\n    order_count, net_total, gross_total, marketplace_tax, currency,\n    lines_json, seller_json, recipient_json, payment_note, note)\n  SELECT p.period, b.invoice_number, (NOW() AT TIME ZONE 'Europe/Berlin')::date,\n         LEAST(p.period, s.first_sale), p.period_end - 1,\n         s.order_count, s.net_total, s.net_total + s.tax_total, s.tax_total, 'EUR',\n         s.lines, $3::jsonb, $4::jsonb, $5, $6\n  FROM params p, summary s, bumped b\n  RETURNING *\n),\nmarked AS (\n  UPDATE orders o SET etsy_rc_invoice_number = c.invoice_number\n  FROM created c, lines l\n  WHERE o.order_id = l.order_id\n  RETURNING o.order_id\n)\nSELECT r.*, FALSE AS is_new,\n       to_char(r.invoice_date, 'DD.MM.YYYY') AS invoice_date_de,\n       to_char(r.service_from, 'DD.MM.YYYY') AS service_from_de,\n       to_char(r.service_to,   'DD.MM.YYYY') AS service_to_de\nFROM existing r\nUNION ALL\nSELECT r.*, TRUE,\n       to_char(r.invoice_date, 'DD.MM.YYYY'),\n       to_char(r.service_from, 'DD.MM.YYYY'),\n       to_char(r.service_to,   'DD.MM.YYYY')\nFROM created r;",
+        "options": {
+          "queryReplacement": "={{ [$json.period, $json.start_date, JSON.stringify($json.seller), JSON.stringify($json.recipient), $json.payment_note, $json.note] }}"
+        }
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000005",
+      "name": "Rechnung anlegen oder laden",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1120, 320],
+      "credentials": {
+        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "id": "has-invoice",
+              "leftValue": "={{ $json.invoice_number ?? '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000006",
+      "name": "Rechnung vorhanden?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rechnung aus dem gespeicherten Snapshot aufbauen – ein Nachdruck ergibt\n// exakt dieselbe Rechnung, auch wenn sich Bestellungen oder Stammdaten\n// inzwischen geändert haben.\nconst r = $input.first().json;\nconst asObj = (v) => typeof v === 'string' ? JSON.parse(v) : v;\nconst lines = asObj(r.lines_json);\nconst eur = (n) => Number(n).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });\nconst de  = (iso) => String(iso).slice(0, 10).split('-').reverse().join('.');  // 2026-09-05 → 05.09.2026\n\nconst items = lines.map((l, i) => ({\n  pos:         i + 1,\n  description: `${l.titles} – Etsy-Bestellung ${l.order_id} vom ${de(l.date)}`,\n  quantity:    1,\n  unit_price:  Number(l.net),\n  total:       Number(l.net),\n}));\n\nconst net = Number(r.net_total);\nconst servicePeriod = `${r.service_from_de} – ${r.service_to_de}`;\nconst month = $('Monat & Konfiguration prüfen').first().json.month;\n\nconst mailText = [\n  `Reverse-Charge-Rechnung an ${asObj(r.recipient_json).name} über die digitalen Verkäufe`\n    + (r.is_new ? '.' : ' (bereits angelegt, erneut versendet).'),\n  '',\n  `Rechnungsnummer:    ${r.invoice_number}`,\n  `Rechnungsdatum:     ${r.invoice_date_de}`,\n  `Leistungszeitraum:  ${servicePeriod}`,\n  `Verkäufe:           ${r.order_count}`,\n  `Rechnungsbetrag:    ${eur(net)} (netto, ohne USt – Reverse Charge)`,\n  '',\n  'Abgleich mit dem Etsy-Zahlungskonto:',\n  `  von Käufern gezahlt inkl. VAT:  ${eur(r.gross_total)}`,\n  `  davon von Etsy erhobene VAT:    ${eur(r.marketplace_tax)}`,\n  '',\n  'Positionen:',\n  ...lines.map(l => `  ${de(l.date)}  ${l.order_id}  ${eur(l.net).padStart(12)}  ${l.titles}`),\n].join('\\n');\n\nreturn {\n  json: {\n    invoice_request: {\n      invoice_number: r.invoice_number,\n      invoice_date:   r.invoice_date_de,\n      seller:         asObj(r.seller_json),\n      buyer:          asObj(r.recipient_json),\n      items,\n      subtotal:       net,\n      shipping_cost:  0,\n      total:          net,\n      currency:       r.currency,\n      payment_note:   r.payment_note,\n      note:           r.note,\n      reverse_charge: true,\n      service_period: servicePeriod,\n    },\n    mail_subject: `Reverse-Charge-Rechnung ${r.invoice_number} an Etsy – ${month}, ${eur(net)}`\n      + (r.is_new ? '' : ' (erneut versendet)'),\n    mail_text: mailText,\n    result: {\n      status:         r.is_new ? 'created' : 'existing',\n      month,\n      invoice_number: r.invoice_number,\n      order_count:    r.order_count,\n      net_total:      net,\n    },\n  },\n};\n"
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000007",
+      "name": "Request bauen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 220]
+    },
+    {
+      "parameters": {
+        "url": "http://typst-api:8080/invoice",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.invoice_request) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "invoice_pdf"
+            }
+          }
+        }
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000008",
+      "name": "PDF generieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 220]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Monat & Konfiguration prüfen').first().json.mail.from }}",
+        "toEmail": "={{ $('Monat & Konfiguration prüfen').first().json.mail.to }}",
+        "subject": "={{ $('Request bauen').first().json.mail_subject }}",
+        "emailFormat": "text",
+        "text": "={{ $('Request bauen').first().json.mail_text }}",
+        "options": { "attachments": "invoice_pdf" }
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000009",
+      "name": "Per E-Mail senden",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2000, 220],
+      "credentials": { "smtp": { "id": "SMTP_CREDENTIAL_ID", "name": "smtp" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Antwort für den Webhook (bei Schedule-Läufen nur im Execution-Log)\nreturn [{ json: $('Request bauen').first().json.result }];\n"
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000010",
+      "name": "Ergebnis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keine (noch nicht abgerechneten) digitalen Verkäufe → keine Rechnung,\n// keine Nummer verbraucht.\nconst month = $('Monat & Konfiguration prüfen').first().json.month;\nreturn [{ json: { status: 'no_sales', month, message: `Keine abzurechnenden digitalen Verkäufe bis einschließlich ${month}` } }];\n"
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000011",
+      "name": "Keine digitalen Verkäufe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 420]
+    }
+  ],
+  "connections": {
+    "Monatlich am 1. um 6 Uhr": {
+      "main": [[{ "node": "Konfiguration laden", "type": "main", "index": 0 }]]
+    },
+    "Webhook: Monat manuell": {
+      "main": [[{ "node": "Konfiguration laden", "type": "main", "index": 0 }]]
+    },
+    "Konfiguration laden": {
+      "main": [[{ "node": "typst-api prüfen", "type": "main", "index": 0 }]]
+    },
+    "typst-api prüfen": {
+      "main": [
+        [{ "node": "Monat & Konfiguration prüfen", "type": "main", "index": 0 }]
+      ]
+    },
+    "Monat & Konfiguration prüfen": {
+      "main": [
+        [{ "node": "Rechnung anlegen oder laden", "type": "main", "index": 0 }]
+      ]
+    },
+    "Rechnung anlegen oder laden": {
+      "main": [[{ "node": "Rechnung vorhanden?", "type": "main", "index": 0 }]]
+    },
+    "Rechnung vorhanden?": {
+      "main": [
+        [{ "node": "Request bauen", "type": "main", "index": 0 }],
+        [{ "node": "Keine digitalen Verkäufe", "type": "main", "index": 0 }]
+      ]
+    },
+    "Request bauen": {
+      "main": [[{ "node": "PDF generieren", "type": "main", "index": 0 }]]
+    },
+    "PDF generieren": {
+      "main": [[{ "node": "Per E-Mail senden", "type": "main", "index": 0 }]]
+    },
+    "Per E-Mail senden": {
+      "main": [[{ "node": "Ergebnis", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Berlin" },
+  "versionId": "e5f6a7b8-0005-0005-0005-000000000099",
+  "tags": [
+    { "name": "etsy" },
+    { "name": "invoice" },
+    { "name": "reverse-charge" }
+  ]
+}
