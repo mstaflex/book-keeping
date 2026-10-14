@@ -36,7 +36,7 @@ docker volume create bookkeeping_secrets
 docker compose up -d
 ```
 
-Fehlt ein Volume, bricht der Start mit `external volume "bookkeeping_..." not found` ab, statt still mit einer leeren Datenbank zu starten. Absichtlich loeschen laesst sich die Datenbank nur mit `docker volume rm bookkeeping_pgdata`.
+Fehlt ein Volume, bricht der Start mit `external volume "bookkeeping_..." not found` ab, statt still mit einer leeren Datenbank zu starten. Absichtlich loeschen laesst sich die Datenbank nur mit `docker volume rm bookkeeping_pgdata`. Hintergrund und Verhalten in allen Situationen: [docs/daten-und-konfiguration.md](docs/daten-und-konfiguration.md).
 
 Beim ersten Start erzeugt der `bootstrap`-Container automatisch DB-Credentials und gibt sie einmalig in den Docker-Logs aus:
 
@@ -130,6 +130,7 @@ Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeufe
 - **Nach jeder Aenderung `docker compose up -d` ausfuehren** (im Panel: „Redeploy“/„Update“). Erst dabei wird der Container mit den neuen Werten neu erstellt. Ein `docker compose restart` uebernimmt geaenderte Variablen **nicht**; das ist Docker-Verhalten, kein Fehler.
 - Bei jedem Start, auch nach einem Server-Neustart, werden die Werte erneut geschrieben. Was als Variable gesetzt ist, gewinnt also gegen Aenderungen von Hand in der Datenbank.
 - Kontrolle: `docker logs app-config` zeigt, welche Schluessel uebernommen bzw. geaendert wurden und welche Pflichtwerte noch fehlen. Die Werte selbst werden nie geloggt.
+- Ablauf, Namensschema und Verhalten bei Neustart, Redeploy oder geleerten Variablen im Detail: [docs/daten-und-konfiguration.md](docs/daten-und-konfiguration.md).
 
 | Variable | `app_config` | Hinweis |
 |---|---|---|
