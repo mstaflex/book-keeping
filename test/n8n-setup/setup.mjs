@@ -50,7 +50,9 @@ async function workflows() {
   const existing = (await api('GET', '/rest/workflows')).data;
   for (const file of readdirSync(DIR).filter(f => f.endsWith('.json') && !SKIP.test(f)).sort()) {
     const w = JSON.parse(readFileSync(`${DIR}/${file}`, 'utf8'));
-    for (const old of existing.filter(x => x.name === w.name)) {
+    // Gleicher Workflow = gleiches Präfix "01 · ", auch wenn sich die Version im Namen geändert hat
+    const prefix = w.name.split(' · ')[0] + ' · ';
+    for (const old of existing.filter(x => x.name.startsWith(prefix))) {
       if (old.active) await api('POST', `/rest/workflows/${old.id}/deactivate`);
       await api('POST', `/rest/workflows/${old.id}/archive`);
       await api('DELETE', `/rest/workflows/${old.id}`);

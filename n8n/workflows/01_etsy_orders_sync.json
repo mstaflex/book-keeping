@@ -1,5 +1,5 @@
 {
-  "name": "01 · Etsy Orders Sync",
+  "name": "01 · Etsy Orders Sync · v1",
   "nodes": [
     {
       "parameters": {
@@ -189,9 +189,5 @@
   "active": false,
   "settings": { "executionOrder": "v1" },
   "versionId": "a1b2c3d4-0001-0001-0001-000000000099",
-  "meta": {
-    "templateId": "etsy-orders-sync-v1",
-    "instanceId": "buschi-bookkeeping"
-  },
   "tags": [{ "name": "etsy" }, { "name": "orders" }, { "name": "sync" }]
 }

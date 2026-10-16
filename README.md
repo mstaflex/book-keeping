@@ -162,15 +162,19 @@ Werte lassen sich weiterhin auch per SQL oder Adminer in `app_config` eintragen.
 
 Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 
-| Workflow | Beschreibung |
-|---|---|
-| `01_etsy_orders_sync.json` | Synchronisiert Etsy-Bestellungen alle 15 Minuten |
-| `02_etsy_transactions_sync.json` | Synchronisiert Etsy-Transaktionen (Gebuehren, Auszahlungen) alle 6 Stunden |
-| `03_notion_sync.json` | Synchronisiert Bestellungen nach Notion |
-| `04_generate_invoice_pdf.json` | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel) |
-| `05_etsy_reverse_charge_invoice.json` | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
+| Workflow | Version | Beschreibung |
+|---|---|---|
+| `01_etsy_orders_sync.json` | v1 | Synchronisiert Etsy-Bestellungen alle 15 Minuten |
+| `02_etsy_transactions_sync.json` | v1 | Synchronisiert Etsy-Transaktionen (Gebuehren, Auszahlungen) alle 6 Stunden |
+| `03_notion_sync.json` | v1 | Synchronisiert Bestellungen nach Notion |
+| `04_generate_invoice_pdf.json` | v1 | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel), per Formular |
+| `05_etsy_reverse_charge_invoice.json` | v1 | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
 
 Nach dem Import in jeder Node das passende Credential aus Schritt 3 auswaehlen (die JSONs enthalten nur Platzhalter wie `POSTGRES_CREDENTIAL_ID`) und die Workflows aktivieren.
+
+**Versionen:** Die Version steht im Namen des Workflows (`01 · Etsy Orders Sync · v1`) und wird mit jeder Aenderung an der JSON-Datei erhoeht. n8n uebernimmt den Namen beim Import. Ein Blick in die Workflow-Liste zeigt so, welcher Stand laeuft; Sollstand ist die Spalte *Version* oben. Workflows ganz ohne Versionsnummer stammen von vor dieser Regel und sind veraltet.
+
+**Aktualisieren:** Den neuen Stand als **neuen** Workflow importieren. Ein Import in einen bestehenden Workflow fuegt die Nodes zusaetzlich ein, statt sie zu ersetzen. Dann Credentials zuweisen, den alten Workflow deaktivieren, den neuen aktivieren (bei 04 und 05 in dieser Reihenfolge, sonst meldet n8n einen Konflikt beim Webhook-Pfad) und den alten loeschen.
 
 ### 7. Rechnung und Lieferschein erzeugen (Workflow 04)
 
@@ -323,7 +327,7 @@ Nach einem `git pull` auf dem Server:
 
 4. **Alles neu starten:** `docker compose up -d --build`. Das baut die Images neu und schreibt die Konfiguration erneut.
 
-5. **Workflows neu importieren** und Credentials wieder zuweisen (siehe oben).
+5. **Workflows neu importieren**, deren Version sich geaendert hat, und Credentials wieder zuweisen (Schritt 6, *Aktualisieren*).
 
 ## Datensicherung
 
