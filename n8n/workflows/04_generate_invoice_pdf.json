@@ -5,7 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "generate-docs",
-        "responseMode": "responseNode",
+        "responseMode": "lastNode",
         "options": {}
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000001",
@@ -19,25 +19,21 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "-- Vergibt die nächste Rechnungsnummer, falls die Bestellung noch keine hat.\n-- FOR UPDATE sperrt die Bestellzeile: ein paralleler Aufruf für dieselbe\n-- Bestellung wartet und sieht danach die vergebene Nummer, statt den\n-- Zähler ein zweites Mal hochzuzählen (Lücke im Nummernkreis).\n-- Order-ID kommt als Query-Parameter $1, nie per String-Einbau ins SQL.\nWITH target AS (\n  SELECT order_id FROM orders\n  WHERE order_id = $1\n    AND (invoice_number IS NULL OR invoice_number = '')\n    -- Rein digitale Bestellungen bekommen keine Kundenrechnung (→ Workflow 05)\n    AND EXISTS (SELECT 1 FROM jsonb_array_elements(items_json) i\n                WHERE NOT COALESCE((i->>'is_digital')::boolean, false))\n  FOR UPDATE\n), bumped AS (\n  INSERT INTO invoice_counter (year, last_nr)\n  SELECT EXTRACT(YEAR FROM NOW() AT TIME ZONE 'Europe/Berlin')::INTEGER, 1\n  FROM target\n  ON CONFLICT (year) DO UPDATE SET last_nr = invoice_counter.last_nr + 1\n  RETURNING year::TEXT || '-' || LPAD(last_nr::TEXT, 4, '0') AS new_invoice_number\n)\nUPDATE orders\nSET invoice_number = bumped.new_invoice_number\nFROM bumped\nWHERE orders.order_id = $1;",
-        "options": {
-          "queryReplacement": "={{ [String($json.body?.order_id ?? '')] }}"
-        }
+        "options": { "queryReplacement": "={{ [$json.order_id] }}" }
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000008",
       "name": "Rechnungsnummer zuweisen",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [460, 300],
-      "credentials": {
-        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
-      }
+      "position": [680, 300],
+      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } }
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT\n  o.order_id,\n  o.order_date,\n  o.buyer_name,\n  o.buyer_street,\n  o.buyer_city,\n  o.buyer_zip,\n  o.buyer_country,\n  o.items_json,\n  o.subtotal,\n  o.shipping_cost,\n  o.total,\n  o.currency,\n  o.invoice_number,\n  o.tracking_number,\n  o.carrier,\n  (SELECT jsonb_object_agg(c.key, c.value)\n     FROM app_config c WHERE c.scope = 'seller') AS seller_config,\n  (SELECT jsonb_object_agg(c.key, c.value)\n     FROM app_config c WHERE c.scope = 'mail')   AS mail_config\nFROM orders AS o\nWHERE o.order_id = $1\nLIMIT 1;",
         "options": {
-          "queryReplacement": "={{ [String($('Webhook: Order-ID empfangen').first().json.body?.order_id ?? '')] }}"
+          "queryReplacement": "={{ [$('Bestellnummer übernehmen').first().json.order_id] }}"
         }
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000002",
@@ -45,20 +41,19 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "alwaysOutputData": true,
-      "position": [680, 300],
-      "credentials": {
-        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
-      }
+      "position": [900, 300],
+      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } }
     },
     {
       "parameters": {
-        "jsCode": "const o = $input.first().json;\nif (!o.order_id) {\n  const id = $('Webhook: Order-ID empfangen').first().json.body?.order_id;\n  throw new Error(`Bestellung '${id ?? ''}' nicht in der Datenbank gefunden`);\n}\nconst items = Array.isArray(o.items_json)\n  ? o.items_json\n  : JSON.parse(o.items_json ?? '[]');\n\n// Digitale Artikel verkauft Etsy als Plattform selbst an den Käufer\n// (Art. 9a MwSt-DVO). Sie werden monatlich per Reverse-Charge-Rechnung an\n// Etsy abgerechnet (Workflow 05) und gehören nicht auf die Kundenrechnung –\n// sonst stünde derselbe Umsatz zweimal in den Büchern.\nconst physical = items.filter(it => !it.is_digital);\nif (!physical.length) {\n  throw new Error(`Bestellung ${o.order_id} enthält nur digitale Artikel – diese werden über die `\n    + `monatliche Reverse-Charge-Rechnung an Etsy abgerechnet (Workflow 05), nicht an den Käufer`);\n}\n\nif (!o.invoice_number) {\n  throw new Error(`Bestellung ${o.order_id} hat keine Rechnungsnummer`);\n}\n\n// Seller-Stammdaten kommen aus app_config (scope 'seller'), siehe README §5.\n// Nicht hier im Code pflegen: ein Re-Import des Workflows würde echte Daten\n// sonst wieder durch Platzhalter (Muster-IBAN, Muster-Steuernummer) ersetzen.\nconst cfg = o.seller_config ?? {};\nconst missing = ['name', 'street', 'zip', 'city'].filter(k => !cfg[k]);\nif (missing.length) {\n  throw new Error(`Verkäuferdaten fehlen in app_config (scope 'seller'): ${missing.join(', ')}`);\n}\n// Absender/Empfänger der PDF-Mail ebenfalls aus app_config (scope 'mail')\nconst mail = o.mail_config ?? {};\nif (!mail.from || !mail.to) {\n  throw new Error(\"Mail-Adressen fehlen in app_config (scope 'mail'): from, to\");\n}\n\nconst SELLER = {\n  name:             cfg.name,\n  business_name:    cfg.business_name ?? null,\n  tagline:          cfg.tagline ?? null,\n  street:           cfg.street,\n  zip:              cfg.zip,\n  city:             cfg.city,\n  country:          cfg.country ?? null,\n  email:            cfg.email ?? null,\n  phone:            cfg.phone ?? null,\n  website:          cfg.website ?? null,\n  iban:             cfg.iban ?? null,\n  bank_name:        cfg.bank_name ?? null,\n  tax_id:           cfg.tax_id ?? null,\n  vat_id:           cfg.vat_id ?? null,\n  kleinunternehmer: String(cfg.kleinunternehmer ?? 'true').toLowerCase() !== 'false',\n};\n\n// Etsy liefert Titel HTML-kodiert (&#39;, &quot;, &amp;) – ältere DB-Zeilen\n// enthalten das noch, daher hier ebenfalls dekodieren.\nconst decodeHtml = (s) => s == null ? s : String(s)\n  .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n  .replace(/&quot;/g, '\"').replace(/&apos;/g, \"'\")\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&amp;/g, '&');\n\n// NUMERIC-Spalten kommen aus Postgres als String (\"12.50\")\nconst round2 = (n) => Math.round(Number(n) * 100) / 100;\n\nconst lineTotal = (it) => round2(Number(it.price) * Number(it.quantity));\n\n// Artikel für API formatieren (nur physische, s.o.)\nconst lineItems = physical.map((it, i) => ({\n  pos:         i + 1,\n  description: decodeHtml(it.title) ?? 'Artikel',\n  quantity:    Number(it.quantity),\n  unit_price:  Number(it.price),\n  total:       lineTotal(it),\n}));\n\n// Etsy-Gutscheine stecken nur in receipt.subtotal (= Artikelsumme − Rabatt).\n// Rabatt anteilig verteilen (bei gemischten Bestellungen entfällt der Rest auf\n// die digitalen Artikel, Workflow 05 rechnet identisch) und als Rabattzeile\n// ausweisen, sonst geht die Rechnung nicht auf.\nconst allSum       = round2(items.reduce((sum, it) => sum + lineTotal(it), 0));\nconst factor       = o.subtotal != null && allSum > 0 ? Number(o.subtotal) / allSum : 1;\nconst itemsSum     = round2(lineItems.reduce((sum, it) => sum + it.total, 0));\nconst subtotal     = round2(itemsSum * factor);\nconst shippingCost = round2(o.shipping_cost ?? 0);\nconst discount     = Math.max(0, round2(itemsSum - subtotal));\n\nconst buyer = {\n  name:    o.buyer_name ?? '',\n  street:  o.buyer_street,\n  zip:     o.buyer_zip,\n  city:    o.buyer_city,\n  country: o.buyer_country,\n};\n\n// Kalenderdatum in deutscher Zeit – n8n läuft meist in UTC, sonst rutschen\n// Bestellungen zwischen 0 und 2 Uhr auf den Vortag.\nconst invoiceDate = new Date(o.order_date).toLocaleDateString('de-DE', {\n  day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Berlin',\n});\n\nreturn {\n  json: {\n    // Rechnungsrequest\n    invoice_request: {\n      invoice_number: o.invoice_number,\n      invoice_date:   invoiceDate,\n      order_id:       o.order_id,\n      seller:         SELLER,\n      buyer,\n      items:          lineItems,\n      subtotal,\n      shipping_cost:  shippingCost,\n      discount,\n      total:          round2(subtotal + shippingCost),\n      currency:       o.currency ?? 'EUR',\n      payment_note:   \"Bereits bezahlt via Etsy Payments\",\n    },\n    // Lieferscheinrequest\n    delivery_request: {\n      delivery_number: \"LS-\" + o.invoice_number,\n      date:            invoiceDate,\n      order_id:        o.order_id,\n      seller:          SELLER,\n      buyer,\n      items:           lineItems,\n      tracking_number: o.tracking_number,\n      carrier:         o.carrier,\n    },\n    order_id: o.order_id,\n    mail:     { from: mail.from, to: mail.to },\n  }\n};\n"
+        "jsCode": "const o = $input.first().json;\nif (!o.order_id) {\n  const id = $('Bestellnummer übernehmen').first().json.order_id;\n  throw new Error(`Bestellung '${id ?? ''}' nicht in der Datenbank gefunden`);\n}\nconst items = Array.isArray(o.items_json)\n  ? o.items_json\n  : JSON.parse(o.items_json ?? '[]');\n\n// Digitale Artikel verkauft Etsy als Plattform selbst an den Käufer\n// (Art. 9a MwSt-DVO). Sie werden monatlich per Reverse-Charge-Rechnung an\n// Etsy abgerechnet (Workflow 05) und gehören nicht auf die Kundenrechnung –\n// sonst stünde derselbe Umsatz zweimal in den Büchern.\nconst physical = items.filter(it => !it.is_digital);\nif (!physical.length) {\n  throw new Error(`Bestellung ${o.order_id} enthält nur digitale Artikel – diese werden über die `\n    + `monatliche Reverse-Charge-Rechnung an Etsy abgerechnet (Workflow 05), nicht an den Käufer`);\n}\n\nif (!o.invoice_number) {\n  throw new Error(`Bestellung ${o.order_id} hat keine Rechnungsnummer`);\n}\n\n// Seller-Stammdaten kommen aus app_config (scope 'seller'), siehe README §5.\n// Nicht hier im Code pflegen: ein Re-Import des Workflows würde echte Daten\n// sonst wieder durch Platzhalter (Muster-IBAN, Muster-Steuernummer) ersetzen.\nconst cfg = o.seller_config ?? {};\nconst missing = ['name', 'street', 'zip', 'city'].filter(k => !cfg[k]);\nif (missing.length) {\n  throw new Error(`Verkäuferdaten fehlen in app_config (scope 'seller'): ${missing.join(', ')}`);\n}\n// Absender/Empfänger der PDF-Mail ebenfalls aus app_config (scope 'mail')\nconst mail = o.mail_config ?? {};\nif (!mail.from || !mail.to) {\n  throw new Error(\"Mail-Adressen fehlen in app_config (scope 'mail'): from, to\");\n}\n\nconst SELLER = {\n  name:             cfg.name,\n  business_name:    cfg.business_name ?? null,\n  tagline:          cfg.tagline ?? null,\n  street:           cfg.street,\n  zip:              cfg.zip,\n  city:             cfg.city,\n  country:          cfg.country ?? null,\n  email:            cfg.email ?? null,\n  phone:            cfg.phone ?? null,\n  website:          cfg.website ?? null,\n  iban:             cfg.iban ?? null,\n  bank_name:        cfg.bank_name ?? null,\n  tax_id:           cfg.tax_id ?? null,\n  vat_id:           cfg.vat_id ?? null,\n  kleinunternehmer: String(cfg.kleinunternehmer ?? 'true').toLowerCase() !== 'false',\n};\n\n// Etsy liefert Titel HTML-kodiert (&#39;, &quot;, &amp;) – ältere DB-Zeilen\n// enthalten das noch, daher hier ebenfalls dekodieren.\nconst decodeHtml = (s) => s == null ? s : String(s)\n  .replace(/&#(\\d+);/g, (_, d) => String.fromCodePoint(Number(d)))\n  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))\n  .replace(/&quot;/g, '\"').replace(/&apos;/g, \"'\")\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n  .replace(/&amp;/g, '&');\n\n// NUMERIC-Spalten kommen aus Postgres als String (\"12.50\")\nconst round2 = (n) => Math.round(Number(n) * 100) / 100;\n\nconst lineTotal = (it) => round2(Number(it.price) * Number(it.quantity));\n\n// Artikel für API formatieren (nur physische, s.o.)\nconst lineItems = physical.map((it, i) => ({\n  pos:         i + 1,\n  description: decodeHtml(it.title) ?? 'Artikel',\n  quantity:    Number(it.quantity),\n  unit_price:  Number(it.price),\n  total:       lineTotal(it),\n}));\n\n// Etsy-Gutscheine stecken nur in receipt.subtotal (= Artikelsumme − Rabatt).\n// Rabatt anteilig verteilen (bei gemischten Bestellungen entfällt der Rest auf\n// die digitalen Artikel, Workflow 05 rechnet identisch) und als Rabattzeile\n// ausweisen, sonst geht die Rechnung nicht auf.\nconst allSum       = round2(items.reduce((sum, it) => sum + lineTotal(it), 0));\nconst factor       = o.subtotal != null && allSum > 0 ? Number(o.subtotal) / allSum : 1;\nconst itemsSum     = round2(lineItems.reduce((sum, it) => sum + it.total, 0));\nconst subtotal     = round2(itemsSum * factor);\nconst shippingCost = round2(o.shipping_cost ?? 0);\nconst discount     = Math.max(0, round2(itemsSum - subtotal));\n\nconst buyer = {\n  name:    o.buyer_name ?? '',\n  street:  o.buyer_street,\n  zip:     o.buyer_zip,\n  city:    o.buyer_city,\n  country: o.buyer_country,\n};\n\n// Kalenderdatum in deutscher Zeit – n8n läuft meist in UTC, sonst rutschen\n// Bestellungen zwischen 0 und 2 Uhr auf den Vortag.\nconst invoiceDate = new Date(o.order_date).toLocaleDateString('de-DE', {\n  day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Berlin',\n});\n\nreturn {\n  json: {\n    // Rechnungsrequest\n    invoice_request: {\n      invoice_number: o.invoice_number,\n      invoice_date:   invoiceDate,\n      order_id:       o.order_id,\n      seller:         SELLER,\n      buyer,\n      items:          lineItems,\n      subtotal,\n      shipping_cost:  shippingCost,\n      discount,\n      total:          round2(subtotal + shippingCost),\n      currency:       o.currency ?? 'EUR',\n      payment_note:   \"Bereits bezahlt via Etsy Payments\",\n    },\n    // Lieferscheinrequest\n    delivery_request: {\n      delivery_number: \"LS-\" + o.invoice_number,\n      date:            invoiceDate,\n      order_id:        o.order_id,\n      seller:          SELLER,\n      buyer,\n      items:           lineItems,\n      tracking_number: o.tracking_number,\n      carrier:         o.carrier,\n    },\n    order_id: o.order_id,\n    mail:     { from: mail.from, to: mail.to },\n  }\n};\n"
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000003",
       "name": "Request-Bodies aufbauen",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 300]
+      "position": [1120, 300],
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -70,10 +65,7 @@
         "jsonBody": "={{ JSON.stringify($json.invoice_request) }}",
         "options": {
           "response": {
-            "response": {
-              "responseFormat": "file",
-              "outputPropertyName": "invoice_pdf"
-            }
+            "response": { "responseFormat": "file", "outputPropertyName": "invoice_pdf" }
           }
         }
       },
@@ -81,7 +73,7 @@
       "name": "Rechnung generieren",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 200]
+      "position": [1340, 200]
     },
     {
       "parameters": {
@@ -93,10 +85,7 @@
         "jsonBody": "={{ JSON.stringify($('Request-Bodies aufbauen').item.json.delivery_request) }}",
         "options": {
           "response": {
-            "response": {
-              "responseFormat": "file",
-              "outputPropertyName": "delivery_pdf"
-            }
+            "response": { "responseFormat": "file", "outputPropertyName": "delivery_pdf" }
           }
         }
       },
@@ -104,7 +93,7 @@
       "name": "Lieferschein generieren",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 400]
+      "position": [1340, 400]
     },
     {
       "parameters": {
@@ -116,7 +105,7 @@
       "name": "PDFs zusammenfuehren",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [1340, 300]
+      "position": [1560, 300]
     },
     {
       "parameters": {
@@ -126,7 +115,7 @@
       "name": "Anhaenge zusammenstellen",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1560, 300]
+      "position": [1780, 300]
     },
     {
       "parameters": {
@@ -135,18 +124,14 @@
         "subject": "=Rechnung {{ $json.invoice_request.invoice_number }} - Bestellung {{ $json.order_id }}",
         "emailFormat": "text",
         "text": "=Anbei Rechnung und Lieferschein fuer Bestellung {{ $json.order_id }}.",
-        "options": {
-          "attachments": "invoice_pdf,delivery_pdf"
-        }
+        "options": { "attachments": "invoice_pdf,delivery_pdf" }
       },
       "id": "d4e5f6a7-0004-0004-0004-00000000000a",
       "name": "Per E-Mail senden",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
-      "position": [1780, 300],
-      "credentials": {
-        "smtp": { "id": "SMTP_CREDENTIAL_ID", "name": "smtp" }
-      }
+      "position": [2000, 300],
+      "credentials": { "smtp": { "id": "SMTP_CREDENTIAL_ID", "name": "smtp" } }
     },
     {
       "parameters": {
@@ -160,26 +145,152 @@
       "name": "invoice_path in DB speichern",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2000, 300],
-      "credentials": {
-        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
-      }
+      "position": [2220, 300],
+      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } }
     },
     {
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ status: 'ok', order_id: $('Anhaenge zusammenstellen').first().json.order_id, invoice_number: $('Anhaenge zusammenstellen').first().json.invoice_request.invoice_number }) }}"
+        "jsCode": "// Antwort für den Webhook (Webhook antwortet mit dem letzten Node).\n// Einen 'Respond to Webhook'-Node erlaubt n8n neben einem Formular nicht.\nconst a = $('Anhaenge zusammenstellen').first().json;\nreturn [{ json: { status: 'ok', order_id: a.order_id, invoice_number: a.invoice_request.invoice_number } }];\n"
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000007",
-      "name": "Webhook Response",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
-      "position": [2220, 300]
+      "name": "Ergebnis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 400]
+    },
+    {
+      "parameters": {
+        "formTitle": "Rechnung und Lieferschein",
+        "formDescription": "Erzeugt Rechnung und Lieferschein für eine Bestellung mit physischen Artikeln. Beide PDFs gehen per Mail raus und stehen danach hier zum Download bereit. Erneut aufgerufen liefert dieselbe Bestellung dieselbe Rechnungsnummer.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Bestellnummer",
+              "placeholder": "Etsy-Bestellnummer, z.B. 3456789012",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": { "path": "rechnung", "buttonLabel": "Erzeugen", "appendAttribution": false }
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000020",
+      "name": "Formular: Bestellnummer",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [240, 500],
+      "webhookId": "d4e5f6a7-0004-0004-0004-000000000020"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formular und Webhook liefern die Bestellnummer an unterschiedlicher Stelle.\nconst fromForm = $('Formular: Bestellnummer').isExecuted;\nconst raw = fromForm\n  ? $('Formular: Bestellnummer').first().json['Bestellnummer']\n  : $('Webhook: Order-ID empfangen').first().json.body?.order_id;\nconst order_id = String(raw ?? '').trim();\nif (!order_id) throw new Error('Keine Bestellnummer angegeben');\nreturn [{ json: { order_id, from_form: fromForm } }];\n"
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000021",
+      "name": "Bestellnummer übernehmen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "d4e5f6a7-0004-0004-0004-000000000022-c",
+              "leftValue": "={{ $('Bestellnummer übernehmen').first().json.from_form }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000022",
+      "name": "Aus dem Formular?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Die Postgres-Node davor gibt keine Binärdaten weiter → PDFs wieder anhängen\nconst a = $('Anhaenge zusammenstellen').first();\nreturn [{ json: { invoice_number: a.json.invoice_request.invoice_number, order_id: a.json.order_id,\n                  mail_to: a.json.mail.to }, binary: a.binary }];\n"
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000023",
+      "name": "PDFs zum Download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 200]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "returnBinary",
+        "completionTitle": "=Rechnung {{ $json.invoice_number }}",
+        "completionMessage": "=Bestellung {{ $json.order_id }}: Rechnung und Lieferschein wurden an {{ $json.mail_to }} gesendet.",
+        "inputDataFieldName": "invoice_pdf,delivery_pdf",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000024",
+      "name": "Formular: Download",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [2880, 200],
+      "webhookId": "d4e5f6a7-0004-0004-0004-000000000024"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "d4e5f6a7-0004-0004-0004-000000000030-c",
+              "leftValue": "={{ $('Formular: Bestellnummer').isExecuted }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000030",
+      "name": "Fehler im Formular?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 700]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Nicht möglich",
+        "completionMessage": "={{ String($json.error?.message ?? $json.error ?? 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}",
+        "options": {}
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000031",
+      "name": "Formular: Fehler",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1560, 600],
+      "webhookId": "d4e5f6a7-0004-0004-0004-000000000031"
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ String($json.error?.message ?? $json.error ?? 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}"
+      },
+      "id": "d4e5f6a7-0004-0004-0004-000000000032",
+      "name": "Fehler weitergeben",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1560, 800]
     }
   ],
   "connections": {
     "Webhook: Order-ID empfangen": {
-      "main": [[{ "node": "Rechnungsnummer zuweisen", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Bestellnummer übernehmen", "type": "main", "index": 0 }]]
     },
     "Rechnungsnummer zuweisen": {
       "main": [[{ "node": "Order aus DB holen", "type": "main", "index": 0 }]]
@@ -188,10 +299,13 @@
       "main": [[{ "node": "Request-Bodies aufbauen", "type": "main", "index": 0 }]]
     },
     "Request-Bodies aufbauen": {
-      "main": [[
-        { "node": "Rechnung generieren",    "type": "main", "index": 0 },
-        { "node": "Lieferschein generieren", "type": "main", "index": 0 }
-      ]]
+      "main": [
+        [
+          { "node": "Rechnung generieren", "type": "main", "index": 0 },
+          { "node": "Lieferschein generieren", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Fehler im Formular?", "type": "main", "index": 0 }]
+      ]
     },
     "Rechnung generieren": {
       "main": [[{ "node": "PDFs zusammenfuehren", "type": "main", "index": 0 }]]
@@ -209,7 +323,31 @@
       "main": [[{ "node": "invoice_path in DB speichern", "type": "main", "index": 0 }]]
     },
     "invoice_path in DB speichern": {
-      "main": [[{ "node": "Webhook Response", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Aus dem Formular?", "type": "main", "index": 0 }]]
+    },
+    "Formular: Bestellnummer": {
+      "main": [[{ "node": "Bestellnummer übernehmen", "type": "main", "index": 0 }]]
+    },
+    "Bestellnummer übernehmen": {
+      "main": [
+        [{ "node": "Rechnungsnummer zuweisen", "type": "main", "index": 0 }],
+        [{ "node": "Fehler im Formular?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Aus dem Formular?": {
+      "main": [
+        [{ "node": "PDFs zum Download", "type": "main", "index": 0 }],
+        [{ "node": "Ergebnis", "type": "main", "index": 0 }]
+      ]
+    },
+    "PDFs zum Download": {
+      "main": [[{ "node": "Formular: Download", "type": "main", "index": 0 }]]
+    },
+    "Fehler im Formular?": {
+      "main": [
+        [{ "node": "Formular: Fehler", "type": "main", "index": 0 }],
+        [{ "node": "Fehler weitergeben", "type": "main", "index": 0 }]
+      ]
     }
   },
   "active": false,

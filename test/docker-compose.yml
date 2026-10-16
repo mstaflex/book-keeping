@@ -1,0 +1,134 @@
+# =============================================================================
+# Lokale Testumgebung – komplett offline lauffähig (nach dem ersten Bauen)
+#
+#   docker compose -f test/docker-compose.yml up -d --build
+#
+#   n8n      http://localhost:5678   Login: test@example.org / Testpass123
+#   Mails    http://localhost:8025   (Mailpit fängt alle Mails ab)
+#   Adminer  http://localhost:8081   (Server orderdb, Benutzer worker / test-worker-pw)
+#
+# Enthält die echten Bausteine (bootstrap, Postgres-Schema, Config-Loader,
+# typst-api, Workflows aus n8n/workflows/) plus Etsy-Mock und Mailpit.
+# Läuft als eigenes Compose-Projekt mit eigenen Volumes und eigenem Netz und
+# berührt eine echte Installation nicht. Ablauf: docs/testen.md
+# =============================================================================
+name: bookkeeping-test
+
+x-n8n-env: &n8n-env
+  N8N_ENCRYPTION_KEY: local-test-key-not-secret
+  GENERIC_TIMEZONE: Europe/Berlin
+  TZ: Europe/Berlin
+  N8N_EDITOR_BASE_URL: http://localhost:5678/
+  WEBHOOK_URL: http://localhost:5678/
+  N8N_SECURE_COOKIE: "false"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  N8N_PERSONALIZATION_ENABLED: "false"
+  N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+  N8N_TEMPLATES_ENABLED: "false"
+  N8N_LISTEN_ADDRESS: 0.0.0.0
+  # n8n vertraut dem Zertifikat des Etsy-Mocks
+  NODE_EXTRA_CA_CERTS: /certs/ca.crt
+
+services:
+  bootstrap:
+    build: ../bootstrap
+    env_file: test.env
+    volumes:
+      - secrets:/secrets
+
+  orderdb:
+    build: ../postgres
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB_FILE: /run/secrets/db_name.txt
+      POSTGRES_USER_FILE: /run/secrets/db_admin_user.txt
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_admin_password.txt
+    volumes:
+      - secrets:/run/secrets:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_admin_user.txt) -d $(cat /run/secrets/db_name.txt)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  config:
+    build: ../config-loader
+    depends_on:
+      orderdb:
+        condition: service_healthy
+    env_file: test.env
+    volumes:
+      - secrets:/run/secrets:ro
+
+  typst-api:
+    build: ../typst-api
+
+  mailpit:
+    image: axllent/mailpit:v1.31.6
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  etsy-mock:
+    build: ./etsy-mock
+    volumes:
+      - certs:/certs
+    healthcheck:
+      test: ["CMD", "test", "-f", "/certs/ready"]
+      interval: 2s
+      retries: 30
+    networks:
+      default:
+        # Die Workflows rufen https://openapi.etsy.com auf – im Testnetz ist das der Mock
+        aliases: [openapi.etsy.com]
+
+  n8n:
+    image: n8nio/n8n:2.43.4
+    depends_on:
+      etsy-mock:
+        condition: service_healthy
+      orderdb:
+        condition: service_healthy
+    environment: *n8n-env
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - certs:/certs:ro
+    ports:
+      - "127.0.0.1:5678:5678"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz/readiness || exit 1"]
+      interval: 5s
+      retries: 60
+
+  # Einmalig: Login, Credentials und Workflows anlegen. Nach Änderungen an den
+  # Workflows erneut: docker compose -f test/docker-compose.yml run --rm n8n-setup
+  n8n-setup:
+    image: n8nio/n8n:2.43.4
+    depends_on:
+      n8n:
+        condition: service_healthy
+    entrypoint: ["sh", "/setup/setup.sh"]
+    env_file: test.env
+    environment:
+      <<: *n8n-env
+      NODE_EXTRA_CA_CERTS: ""
+      N8N_URL: http://n8n:5678
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-setup:/setup:ro
+      - ../n8n/workflows:/workflows:ro
+
+  adminer:
+    image: adminer:5.5.1
+    environment:
+      ADMINER_DEFAULT_SERVER: orderdb
+    ports:
+      - "127.0.0.1:8081:8080"
+
+volumes:
+  secrets:
+  pgdata:
+  certs:
+  n8n_data:

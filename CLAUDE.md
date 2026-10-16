@@ -107,9 +107,12 @@ does not receive mail; it only links commits to the GitHub profile.
   `options.queryReplacement` as an array expression), never `'{{ … }}'` inside
   the SQL text. Webhook input and Etsy data (titles with apostrophes) are
   untrusted.
-- **Webhooks** (`generate-docs`, `etsy-rc-invoice`) have no authentication by
-  default; recommend Header Auth when the n8n instance is reachable from the
-  internet. Never document a live webhook URL.
+- **Webhooks and forms** (`generate-docs`, `etsy-rc-invoice`, forms `rechnung`,
+  `etsy-rechnung`) have no authentication by default; recommend Header Auth
+  (webhooks) and Basic Auth (forms) when the n8n instance is reachable from
+  the internet. Never document a live webhook or form URL. A workflow with a
+  Form Trigger must not contain a "Respond to Webhook" node (n8n refuses to
+  start it); webhooks there use `responseMode: lastNode`.
 - **Network:** Postgres and `typst-api` stay inside the Docker network
   `n8n-backend`; do not publish their ports in `docker-compose.yml`. The only
   published port is the optional Adminer UI (profile `tools`) on
@@ -117,3 +120,18 @@ does not receive mail; it only links commits to the GitHub profile.
   the IP, or route it through a public reverse proxy.
 - **typst-api** rejects unknown request fields (`extra="forbid"`); keep that,
   so an outdated image fails loudly instead of rendering incomplete invoices.
+
+## 9. Local test stack
+
+- `test/docker-compose.yml` runs the real components plus an Etsy mock and
+  Mailpit (docs/testen.md). After changing workflows, templates, schema or the
+  config loader, run the flow from docs/testen.md and `test/report.sh` before
+  pushing.
+- `test/test.env`, `test/n8n-setup/credentials.json` and
+  `test/etsy-mock/fixtures.py` contain only invented data and test-only
+  passwords (placeholders from section 3). Never copy real values there.
+- Test volumes stay project-local (`bookkeeping-test_*`); never mark them
+  `external` or reuse the production volume names. Published test ports stay
+  on `127.0.0.1`.
+- New fixture cases go into `fixtures.py` with an expected result in the table
+  in docs/testen.md.

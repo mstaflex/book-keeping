@@ -172,13 +172,31 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 
 Nach dem Import in jeder Node das passende Credential aus Schritt 3 auswaehlen (die JSONs enthalten nur Platzhalter wie `POSTGRES_CREDENTIAL_ID`) und die Workflows aktivieren.
 
-> **Sicherheit:** Der Webhook von Workflow 04 (`POST /webhook/generate-docs`, Body `{"order_id": "..."}`) hat keine Authentifizierung. Ist n8n aus dem Internet erreichbar, kann jeder Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. In der Webhook-Node unter **Authentication** am besten *Header Auth* aktivieren und den Header beim Aufrufer mitsenden.
+### 7. Rechnung und Lieferschein erzeugen (Workflow 04)
+
+Workflow 04 hat ein n8n-Formular: im Browser `<n8n-adresse>/form/rechnung` oeffnen, die Etsy-Bestellnummer eintragen, **Erzeugen**. Danach stehen Rechnung und Lieferschein auf der Seite zum Download bereit (zum Ausdrucken beim Packen) und gehen zusaetzlich per Mail an `mail.to`.
+
+- Derselbe Aufruf fuer dieselbe Bestellung liefert dieselbe Rechnungsnummer, es entsteht keine zweite Rechnung.
+- Bestellungen nur mit digitalen Artikeln, unbekannte Bestellnummern oder fehlende Verkaeuferdaten lehnt das Formular mit einer Meldung ab, ohne eine Nummer zu vergeben.
+- Fuer Skripte gibt es weiterhin den Webhook `POST /webhook/generate-docs` mit Body `{"order_id": "..."}`; er antwortet mit `{"status": "ok", "order_id": "...", "invoice_number": "..."}`.
+
+> **Sicherheit:** Formular und Webhooks haben keine Anmeldung. Wer die Adresse erreicht, kann Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. Ist n8n nur ueber VPN erreichbar, ist das in Ordnung. Ist n8n aus dem Internet erreichbar: im Formular-Trigger unter **Authentication** *Basic Auth* setzen (neuere n8n-Versionen bieten auch *n8n User Auth*, also das n8n-Login) und bei den Webhooks *Header Auth*.
+
+## Lokal testen
+
+`test/` enthaelt eine vollstaendige Testumgebung, die auf dem eigenen Rechner offline laeuft: n8n mit fertig eingerichteten Credentials und Workflows, ein nachgebautes Etsy mit Testbestellungen fuer Vormonat und laufenden Monat, Mailpit statt echtem Mailversand, dazu dieselbe Datenbank, derselbe Config-Loader und dieselbe typst-api wie im Betrieb.
+
+```bash
+docker compose -f test/docker-compose.yml up -d --build
+```
+
+Danach n8n unter `http://localhost:5678` (Login `test@example.org` / `Testpass123`), Mails unter `http://localhost:8025`. Ablauf, erwartete Ergebnisse und Pruefbericht: [docs/testen.md](docs/testen.md).
 
 ## Digitale Verkaeufe: Reverse-Charge-Rechnung an Etsy (Workflow 05)
 
 Bei digitalen Artikeln gilt Etsy gegenueber dem Kaeufer als Verkaeufer (Art. 9a MwSt-DVO), erhebt die VAT und fuehrt sie selbst ab. Der Shop verkauft die Leistung an Etsy Ireland und stellt dafuer eine Reverse-Charge-Rechnung ohne USt. Workflow 05 erzeugt diese Rechnung einmal im Monat:
 
-- **Wann:** am 1. jedes Monats um 6 Uhr (Europe/Berlin) fuer den Vormonat. Manuell per `POST /webhook/etsy-rc-invoice` mit Body `{"month": "2026-09"}`, ohne `month` gilt der Vormonat. Laufende oder kuenftige Monate werden abgelehnt.
+- **Wann:** am 1. jedes Monats um 6 Uhr (Europe/Berlin) fuer den Vormonat. Manuell ueber das Formular `<n8n-adresse>/form/etsy-rechnung` (Feld *Monat* im Format `YYYY-MM`, leer = Vormonat; das PDF steht danach zum Download bereit) oder per `POST /webhook/etsy-rc-invoice` mit Body `{"month": "2026-09"}`, ohne `month` gilt der Vormonat. Laufende oder kuenftige Monate werden abgelehnt.
 - **Welche Bestellungen:** alle nicht stornierten Etsy-Bestellungen mit mindestens einem digitalen Artikel, die noch auf keiner Etsy-Rechnung stehen, Bestelldatum (deutsche Zeit) ab `start_date` bis Monatsende. Verspaetet synchronisierte Bestellungen aus Vormonaten landen dadurch automatisch auf der naechsten Rechnung; der Leistungszeitraum beginnt dann beim aeltesten Verkauf.
 - **Betrag je Bestellung:** der Verkaufspreis ohne die von Etsy erhobene VAT. Etsys `subtotal` (Artikel nach Gutschein, ohne VAT und Versand) entspricht genau Brutto minus VAT. Bei gemischten Bestellungen zaehlt nur der digitale Anteil, der Gutschein wird anteilig verteilt. Die physischen Artikel derselben Bestellung rechnet Workflow 04 identisch ab, zusammen ergibt das wieder den `subtotal`.
 - **Ergebnis:** Rechnung im gemeinsamen Nummernkreis (`invoice_counter`), gespeichert in `etsy_rc_invoices` mit eingefrorenen Positionen, Verkaeufer- und Empfaengerdaten. Die Bestellungen werden in `orders.etsy_rc_invoice_number` markiert. Das PDF geht per E-Mail raus, mit Abgleichwerten fuer das Etsy-Zahlungskonto (gezahlt inkl. VAT, davon VAT).

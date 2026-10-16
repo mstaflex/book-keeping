@@ -46,12 +46,13 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [460, 320],
-      "credentials": {
-        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
-      }
+      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } }
     },
     {
-      "parameters": { "url": "http://typst-api:8080/health", "options": {} },
+      "parameters": {
+        "url": "http://typst-api:8080/health",
+        "options": {}
+      },
       "id": "e5f6a7b8-0005-0005-0005-000000000012",
       "name": "typst-api prüfen",
       "type": "n8n-nodes-base.httpRequest",
@@ -60,13 +61,14 @@
     },
     {
       "parameters": {
-        "jsCode": "// Abrechnungsmonat bestimmen und Konfiguration prüfen.\n// Schedule (1. des Monats): Vormonat. Webhook: {\"month\": \"2026-09\"} zum\n// Nachholen oder erneuten Versenden; ohne Angabe ebenfalls der Vormonat.\nconst yearMonth = (d) => new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit',\n}).format(d);                                   // \"2026-10\"\nconst currentMonth = yearMonth(new Date());\n\nlet month = null;\nif ($('Webhook: Monat manuell').isExecuted) {\n  const req = $('Webhook: Monat manuell').first().json;\n  month = req.body?.month ?? req.query?.month ?? null;\n}\nif (!month) {\n  const [y, m] = currentMonth.split('-').map(Number);\n  month = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;\n}\nmonth = String(month).trim();\nif (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)) {\n  throw new Error(`Ungültiger Monat '${month}' – erwartet wird YYYY-MM`);\n}\nif (month >= currentMonth) {\n  throw new Error(`${month} ist noch nicht abgeschlossen – abgerechnet werden nur vergangene Monate`);\n}\n\n// Ein veraltetes typst-api-Image ignoriert reverse_charge und würde still\n// eine normale §19-Rechnung an Etsy erzeugen → vor dem Anlegen abbrechen.\nconst api = $('typst-api prüfen').first().json;\nif (!(api.features ?? []).includes('reverse_charge')) {\n  throw new Error('typst-api kennt keine Reverse-Charge-Rechnungen – Image neu bauen: '\n    + 'docker compose up -d --build typst-api');\n}\n\nconst cfg    = $('Konfiguration laden').first().json;\nconst seller = cfg.seller ?? {};\nconst rc     = cfg.etsy_rc ?? {};\nconst mail   = cfg.mail ?? {};\n// USt-IdNr. beider Seiten ist bei Reverse Charge Pflicht (§14a Abs. 1 UStG)\nconst missing = [\n  ...['name', 'street', 'zip', 'city', 'vat_id']\n      .filter(k => !seller[k]).map(k => `seller.${k}`),\n  ...['recipient_name', 'recipient_street', 'recipient_city', 'recipient_country',\n      'recipient_vat_id', 'start_date']\n      .filter(k => !rc[k]).map(k => `etsy_rc.${k}`),\n  ...['from', 'to'].filter(k => !mail[k]).map(k => `mail.${k}`),\n];\nif (missing.length) {\n  throw new Error(`Fehlende Konfiguration in app_config: ${missing.join(', ')} (siehe README)`);\n}\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(rc.start_date)) {\n  throw new Error(`etsy_rc.start_date '${rc.start_date}' – erwartet wird YYYY-MM-DD`);\n}\n\nconst pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? null]));\nreturn [{\n  json: {\n    month,\n    mail:       { from: mail.from, to: mail.to },\n    period:     `${month}-01`,\n    start_date: rc.start_date,\n    // Snapshots: werden mit der Rechnung gespeichert und beim Nachdruck verwendet\n    seller: {\n      ...pick(seller, ['name', 'business_name', 'tagline', 'street', 'zip', 'city', 'country',\n                       'email', 'phone', 'website', 'iban', 'bank_name', 'tax_id', 'vat_id']),\n      kleinunternehmer: String(seller.kleinunternehmer ?? 'true').toLowerCase() !== 'false',\n    },\n    recipient: {\n      name:    rc.recipient_name,\n      street:  rc.recipient_street,\n      zip:     rc.recipient_zip ?? null,\n      city:    rc.recipient_city,\n      country: rc.recipient_country,\n      vat_id:  rc.recipient_vat_id,\n    },\n    payment_note: rc.payment_note\n      ?? 'Verrechnet über das Etsy-Zahlungskonto (Etsy Payments).',\n    note: rc.note\n      ?? 'Digitale Artikel (elektronisch erbrachte Leistungen), über die Etsy-Plattform an '\n       + 'Endkunden verkauft. Etsy gilt dabei als leistender Unternehmer gegenüber dem '\n       + 'Endkunden (Art. 9a MwSt-DVO); abgerechnet wird der Verkaufspreis ohne die von '\n       + 'Etsy erhobene VAT.',\n  },\n}];\n"
+        "jsCode": "// Abrechnungsmonat bestimmen und Konfiguration prüfen.\n// Schedule (1. des Monats): Vormonat. Formular oder Webhook ({\"month\": \"2026-09\"})\n// zum Nachholen oder erneuten Versenden; ohne Angabe ebenfalls der Vormonat.\nconst yearMonth = (d) => new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit',\n}).format(d);                                   // \"2026-10\"\nconst currentMonth = yearMonth(new Date());\n\nlet month = null;\nif ($('Webhook: Monat manuell').isExecuted) {\n  const req = $('Webhook: Monat manuell').first().json;\n  month = req.body?.month ?? req.query?.month ?? null;\n}\nconst fromForm = $('Formular: Monat').isExecuted;\nif (fromForm) {\n  month = $('Formular: Monat').first().json['Monat'] || null;\n}\nif (!month) {\n  const [y, m] = currentMonth.split('-').map(Number);\n  month = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;\n}\nmonth = String(month).trim();\nif (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)) {\n  throw new Error(`Ungültiger Monat '${month}' – erwartet wird YYYY-MM`);\n}\nif (month >= currentMonth) {\n  throw new Error(`${month} ist noch nicht abgeschlossen – abgerechnet werden nur vergangene Monate`);\n}\n\n// Ein veraltetes typst-api-Image ignoriert reverse_charge und würde still\n// eine normale §19-Rechnung an Etsy erzeugen → vor dem Anlegen abbrechen.\nconst api = $('typst-api prüfen').first().json;\nif (!(api.features ?? []).includes('reverse_charge')) {\n  throw new Error('typst-api kennt keine Reverse-Charge-Rechnungen – Image neu bauen: '\n    + 'docker compose up -d --build typst-api');\n}\n\nconst cfg    = $('Konfiguration laden').first().json;\nconst seller = cfg.seller ?? {};\nconst rc     = cfg.etsy_rc ?? {};\nconst mail   = cfg.mail ?? {};\n// USt-IdNr. beider Seiten ist bei Reverse Charge Pflicht (§14a Abs. 1 UStG)\nconst missing = [\n  ...['name', 'street', 'zip', 'city', 'vat_id']\n      .filter(k => !seller[k]).map(k => `seller.${k}`),\n  ...['recipient_name', 'recipient_street', 'recipient_city', 'recipient_country',\n      'recipient_vat_id', 'start_date']\n      .filter(k => !rc[k]).map(k => `etsy_rc.${k}`),\n  ...['from', 'to'].filter(k => !mail[k]).map(k => `mail.${k}`),\n];\nif (missing.length) {\n  throw new Error(`Fehlende Konfiguration in app_config: ${missing.join(', ')} (siehe README)`);\n}\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(rc.start_date)) {\n  throw new Error(`etsy_rc.start_date '${rc.start_date}' – erwartet wird YYYY-MM-DD`);\n}\n\nconst pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? null]));\nreturn [{\n  json: {\n    month,\n    from_form:  fromForm,\n    mail:       { from: mail.from, to: mail.to },\n    period:     `${month}-01`,\n    start_date: rc.start_date,\n    // Snapshots: werden mit der Rechnung gespeichert und beim Nachdruck verwendet\n    seller: {\n      ...pick(seller, ['name', 'business_name', 'tagline', 'street', 'zip', 'city', 'country',\n                       'email', 'phone', 'website', 'iban', 'bank_name', 'tax_id', 'vat_id']),\n      kleinunternehmer: String(seller.kleinunternehmer ?? 'true').toLowerCase() !== 'false',\n    },\n    recipient: {\n      name:    rc.recipient_name,\n      street:  rc.recipient_street,\n      zip:     rc.recipient_zip ?? null,\n      city:    rc.recipient_city,\n      country: rc.recipient_country,\n      vat_id:  rc.recipient_vat_id,\n    },\n    payment_note: rc.payment_note\n      ?? 'Verrechnet über das Etsy-Zahlungskonto (Etsy Payments).',\n    note: rc.note\n      ?? 'Digitale Artikel (elektronisch erbrachte Leistungen), über die Etsy-Plattform an '\n       + 'Endkunden verkauft. Etsy gilt dabei als leistender Unternehmer gegenüber dem '\n       + 'Endkunden (Art. 9a MwSt-DVO); abgerechnet wird der Verkaufspreis ohne die von '\n       + 'Etsy erhobene VAT.',\n  },\n}];\n"
       },
       "id": "e5f6a7b8-0005-0005-0005-000000000004",
       "name": "Monat & Konfiguration prüfen",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 320]
+      "position": [900, 320],
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -81,9 +83,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1120, 320],
-      "credentials": {
-        "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" }
-      }
+      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } }
     },
     {
       "parameters": {
@@ -94,11 +94,7 @@
               "id": "has-invoice",
               "leftValue": "={{ $json.invoice_number ?? '' }}",
               "rightValue": "",
-              "operator": {
-                "type": "string",
-                "operation": "notEmpty",
-                "singleValue": true
-              }
+              "operator": { "type": "string", "operation": "notEmpty", "singleValue": true }
             }
           ]
         }
@@ -129,10 +125,7 @@
         "jsonBody": "={{ JSON.stringify($json.invoice_request) }}",
         "options": {
           "response": {
-            "response": {
-              "responseFormat": "file",
-              "outputPropertyName": "invoice_pdf"
-            }
+            "response": { "responseFormat": "file", "outputPropertyName": "invoice_pdf" }
           }
         }
       },
@@ -166,7 +159,7 @@
       "name": "Ergebnis",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2220, 220]
+      "position": [2440, 320]
     },
     {
       "parameters": {
@@ -176,7 +169,166 @@
       "name": "Keine digitalen Verkäufe",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
+      "position": [1780, 520]
+    },
+    {
+      "parameters": {
+        "formTitle": "Reverse-Charge-Rechnung an Etsy",
+        "formDescription": "Erzeugt die Monatsrechnung über die digitalen Verkäufe oder liefert die bereits angelegte erneut aus. Ohne Angabe: Vormonat. Nur abgeschlossene Monate.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Monat",
+              "placeholder": "YYYY-MM, z.B. 2026-09",
+              "requiredField": false
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "path": "etsy-rechnung",
+          "buttonLabel": "Erzeugen",
+          "appendAttribution": false
+        }
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000020",
+      "name": "Formular: Monat",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [240, 620],
+      "webhookId": "e5f6a7b8-0005-0005-0005-000000000020"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "e5f6a7b8-0005-0005-0005-000000000021-c",
+              "leftValue": "={{ $('Monat & Konfiguration prüfen').first().json.from_form }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000021",
+      "name": "Aus dem Formular?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2220, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// PDF aus 'PDF generieren' für den Download wieder anhängen\nconst r = $('Request bauen').first().json.result;\nreturn [{ json: r, binary: $('PDF generieren').first().binary }];\n"
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000022",
+      "name": "PDF zum Download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 120]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "returnBinary",
+        "completionTitle": "=Rechnung {{ $json.invoice_number }}",
+        "completionMessage": "={{ $json.status === 'created' ? 'Neu angelegt' : 'Bereits angelegt, erneut versendet' }}: {{ $json.month }}, {{ $json.order_count }} Verkäufe, {{ $json.net_total.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' }) }}.",
+        "inputDataFieldName": "invoice_pdf",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000023",
+      "name": "Formular: Download",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [2880, 120],
+      "webhookId": "e5f6a7b8-0005-0005-0005-000000000023"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "e5f6a7b8-0005-0005-0005-000000000024-c",
+              "leftValue": "={{ $('Monat & Konfiguration prüfen').first().json.from_form }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000024",
+      "name": "Aus dem Formular? (keine Verkäufe)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
       "position": [1560, 420]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Keine Rechnung",
+        "completionMessage": "=Keine abzurechnenden digitalen Verkäufe bis einschließlich {{ $('Monat & Konfiguration prüfen').first().json.month }}.",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000025",
+      "name": "Formular: Keine Verkäufe",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1780, 320],
+      "webhookId": "e5f6a7b8-0005-0005-0005-000000000025"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "e5f6a7b8-0005-0005-0005-000000000030-c",
+              "leftValue": "={{ $('Formular: Monat').isExecuted }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000030",
+      "name": "Fehler im Formular?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 720]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Nicht möglich",
+        "completionMessage": "={{ String($json.error?.message ?? $json.error ?? 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}",
+        "options": {}
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000031",
+      "name": "Formular: Fehler",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [1340, 620],
+      "webhookId": "e5f6a7b8-0005-0005-0005-000000000031"
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ String($json.error?.message ?? $json.error ?? 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}"
+      },
+      "id": "e5f6a7b8-0005-0005-0005-000000000032",
+      "name": "Fehler weitergeben",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [1340, 820]
     }
   ],
   "connections": {
@@ -190,13 +342,12 @@
       "main": [[{ "node": "typst-api prüfen", "type": "main", "index": 0 }]]
     },
     "typst-api prüfen": {
-      "main": [
-        [{ "node": "Monat & Konfiguration prüfen", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Monat & Konfiguration prüfen", "type": "main", "index": 0 }]]
     },
     "Monat & Konfiguration prüfen": {
       "main": [
-        [{ "node": "Rechnung anlegen oder laden", "type": "main", "index": 0 }]
+        [{ "node": "Rechnung anlegen oder laden", "type": "main", "index": 0 }],
+        [{ "node": "Fehler im Formular?", "type": "main", "index": 0 }]
       ]
     },
     "Rechnung anlegen oder laden": {
@@ -205,7 +356,7 @@
     "Rechnung vorhanden?": {
       "main": [
         [{ "node": "Request bauen", "type": "main", "index": 0 }],
-        [{ "node": "Keine digitalen Verkäufe", "type": "main", "index": 0 }]
+        [{ "node": "Aus dem Formular? (keine Verkäufe)", "type": "main", "index": 0 }]
       ]
     },
     "Request bauen": {
@@ -215,15 +366,35 @@
       "main": [[{ "node": "Per E-Mail senden", "type": "main", "index": 0 }]]
     },
     "Per E-Mail senden": {
-      "main": [[{ "node": "Ergebnis", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Aus dem Formular?", "type": "main", "index": 0 }]]
+    },
+    "Formular: Monat": {
+      "main": [[{ "node": "Konfiguration laden", "type": "main", "index": 0 }]]
+    },
+    "Aus dem Formular?": {
+      "main": [
+        [{ "node": "PDF zum Download", "type": "main", "index": 0 }],
+        [{ "node": "Ergebnis", "type": "main", "index": 0 }]
+      ]
+    },
+    "PDF zum Download": {
+      "main": [[{ "node": "Formular: Download", "type": "main", "index": 0 }]]
+    },
+    "Aus dem Formular? (keine Verkäufe)": {
+      "main": [
+        [{ "node": "Formular: Keine Verkäufe", "type": "main", "index": 0 }],
+        [{ "node": "Keine digitalen Verkäufe", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fehler im Formular?": {
+      "main": [
+        [{ "node": "Formular: Fehler", "type": "main", "index": 0 }],
+        [{ "node": "Fehler weitergeben", "type": "main", "index": 0 }]
+      ]
     }
   },
   "active": false,
   "settings": { "executionOrder": "v1", "timezone": "Europe/Berlin" },
   "versionId": "e5f6a7b8-0005-0005-0005-000000000099",
-  "tags": [
-    { "name": "etsy" },
-    { "name": "invoice" },
-    { "name": "reverse-charge" }
-  ]
+  "tags": [{ "name": "etsy" }, { "name": "invoice" }, { "name": "reverse-charge" }]
 }
