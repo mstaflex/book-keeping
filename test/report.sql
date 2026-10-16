@@ -86,8 +86,8 @@ SELECT month AS monat,
        SUM(amount) FILTER (WHERE type IN ('sale', 'marketplace_tax'))   AS umsatz_ohne_etsy_steuer,
        SUM(amount) FILTER (WHERE type LIKE 'fee%')                      AS gebuehren,
        SUM(amount) FILTER (WHERE type = 'refund')                       AS erstattungen,
-       SUM(amount) FILTER (WHERE type IN ('payout', 'transfer'))        AS geldbewegungen,
-       COUNT(*)    FILTER (WHERE type = 'other')                        AS unbekannt
+       SUM(amount) FILTER (WHERE type IN ('payout', 'card_payment'))        AS geldbewegungen,
+       COUNT(*)    FILTER (WHERE type = 'unknown')                        AS unbekannt
 FROM etsy_transactions
 WHERE date >= date_trunc('month', NOW()) - INTERVAL '2 months'
 GROUP BY month ORDER BY month;
@@ -95,7 +95,7 @@ GROUP BY month ORDER BY month;
 \echo
 \echo '== Unbekannte Ledger-Typen (in Workflow 02 ergänzen, sonst leer)'
 SELECT ledger_type, count(*) AS anzahl, sum(amount) AS summe
-FROM etsy_transactions WHERE type = 'other'
+FROM etsy_transactions WHERE type = 'unknown'
 GROUP BY ledger_type ORDER BY anzahl DESC;
 
 \echo

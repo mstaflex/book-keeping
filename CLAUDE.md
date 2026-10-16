@@ -34,7 +34,7 @@ of the deployment" instead of naming the provider).
 
 When adding a feature that needs a new instance-specific value: add the
 variable to the `config` service in `docker-compose.yml` (prefix `ETSY_`,
-`ETSY_RC_`, `NOTION_`, `MAIL_` or `SELLER_`; a new scope needs a new prefix in
+`ETSY_RC_`, `NOTION_`, `MAIL_`, `SELLER_` or `LEXOFFICE_`; a new scope needs a new prefix in
 `config-loader/apply-config.sh`), document it in README step 5 and in
 `.env.example` (placeholder value only), read it from `app_config` in the
 workflow and fail with a clear error if it is missing. Do not hard-code it in a
@@ -107,12 +107,13 @@ does not receive mail; it only links commits to the GitHub profile.
   `options.queryReplacement` as an array expression), never `'{{ … }}'` inside
   the SQL text. Webhook input and Etsy data (titles with apostrophes) are
   untrusted.
-- **Webhooks and forms** (`generate-docs`, `etsy-rc-invoice`, forms `rechnung`,
-  `etsy-rechnung`) have no authentication by default; recommend Header Auth
-  (webhooks) and Basic Auth (forms) when the n8n instance is reachable from
-  the internet. Never document a live webhook or form URL. A workflow with a
-  Form Trigger must not contain a "Respond to Webhook" node (n8n refuses to
-  start it); webhooks there use `responseMode: lastNode`.
+- **Webhooks and forms** (`generate-docs`, `etsy-rc-invoice`,
+  `etsy-lexoffice-export`, forms `rechnung`, `etsy-rechnung`) have no
+  authentication by default; recommend Header Auth (webhooks) and Basic Auth
+  (forms) when the n8n instance is reachable from the internet. Never document
+  a live webhook or form URL. A workflow with a Form Trigger must not contain a
+  "Respond to Webhook" node (n8n refuses to start it); webhooks there use
+  `responseMode: lastNode`.
 - **Network:** Postgres and `typst-api` stay inside the Docker network
   `n8n-backend`; do not publish their ports in `docker-compose.yml`. The only
   published port is the optional Adminer UI (profile `tools`) on

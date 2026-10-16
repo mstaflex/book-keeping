@@ -1,0 +1,273 @@
+{
+  "name": "06 · Etsy-Zahlungskonto → Lexoffice (Monats-CSV) · v1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "monthsInterval": 1,
+              "triggerAtDayOfMonth": 2,
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000001",
+      "name": "Monatlich am 2. um 7 Uhr",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 220]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "etsy-lexoffice-export",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000002",
+      "name": "Webhook: manuell",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 420],
+      "webhookId": "etsy-lexoffice-export"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monat und Aktion bestimmen.\n//   Schedule (2. des Monats, nach der Proformarechnung aus Workflow 05 am 1.):\n//     Datei für den Vormonat erzeugen (\"create\").\n//   Webhook, Body z.B. {\"month\": \"2026-09\", \"action\": \"preview\"}:\n//     preview  Vorschau mit Prüfbericht, schreibt nichts (Standard)\n//     create   Datei erzeugen und speichern. Gibt es sie schon, kommt dieselbe\n//              Datei erneut; \"regenerate\": true erzeugt sie neu, solange der\n//              Import nicht bestätigt ist\n//     confirm  nach dem Import in Lexoffice: Monat als importiert markieren\n//   \"proforma_number\" nur angeben, wenn die Proformarechnung des Monats nicht\n//   aus Workflow 05 stammt (z.B. vor etsy_rc.start_date von Hand geschrieben).\n// Alle fachlichen Prüfungen (abgeschlossener Monat, Stichtag, Summen,\n// Proformarechnung) macht die Datenbank, siehe Migration 004.\nconst yearMonth = (d) => new Intl.DateTimeFormat('sv-SE', {\n  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit',\n}).format(d);                                   // \"2026-10\"\n\nconst manual = $('Webhook: manuell').isExecuted;\nlet req = {};\nif (manual) {\n  const w = $('Webhook: manuell').first().json;\n  req = { ...(w.query ?? {}), ...(w.body ?? {}) };\n}\n\nlet month = req.month != null ? String(req.month).trim() : '';\nif (!month) {\n  const [y, m] = yearMonth(new Date()).split('-').map(Number);\n  month = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;\n}\nif (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)) {\n  throw new Error(`Ungültiger Monat '${month}' – erwartet wird YYYY-MM`);\n}\nconst action = manual ? String(req.action ?? 'preview').trim().toLowerCase() : 'create';\nif (!['preview', 'create', 'confirm'].includes(action)) {\n  throw new Error(`Unbekannte action '${action}' – erlaubt sind preview, create, confirm`);\n}\n\nreturn [{\n  json: {\n    month,\n    action,\n    regenerate: req.regenerate === true || String(req.regenerate ?? '').toLowerCase() === 'true',\n    proforma_number: req.proforma_number != null ? String(req.proforma_number).trim() : '',\n  },\n}];\n"
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000003",
+      "name": "Auftrag bestimmen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 320]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Die ganze Logik (Zuordnung, Summen, Kontrollen, Idempotenz) liegt in der\n-- Datenbank (Migration 004); dieselben Funktionen gehen auch direkt per psql.\n-- Werte als Query-Parameter, nie per String-Einbau ins SQL.\nSELECT CASE $1\n         WHEN 'create'  THEN lexoffice_export_create($2, NULLIF($3, ''), $4::boolean)\n         WHEN 'confirm' THEN lexoffice_export_confirm($2)\n         ELSE                lexoffice_export_build($2, NULLIF($3, ''))\n       END AS result,\n       (SELECT jsonb_object_agg(key, value) FROM app_config WHERE scope = 'mail') AS mail;",
+        "options": {
+          "queryReplacement": "={{ [$json.action, $json.month, $json.proforma_number, $json.regenerate] }}"
+        }
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000004",
+      "name": "Export ausführen",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [680, 320],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "orderdb"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mail mit dem Prüfbericht. Die CSV hängt nur an, wenn sie (noch) importiert\n// werden soll. Eine Vorschau heißt *_VORSCHAU.csv: sie ist nicht gespeichert,\n// also nicht importieren – erst \"create\" macht daraus die Datei für Lexoffice.\nconst { result: r, mail } = $input.first().json;\nif (!mail?.from || !mail?.to) {\n  throw new Error(\"Mail-Adressen fehlen in app_config (scope 'mail'): from, to\");\n}\n\nconst label = r.label ?? r.month;\nconst eur = (n) => Number(n ?? 0).toLocaleString('de-DE',\n  { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';\nconst lines = r.ok && r.line_count != null ? ` – ${r.line_count} Zeilen, Summe ${eur(r.line_sum)}` : '';\nconst subject = {\n  preview:           `[Vorschau] Etsy → Lexoffice ${label}${lines}`,\n  created:           `Etsy → Lexoffice ${label}: ${r.file_name}${lines}`,\n  regenerated:       `Etsy → Lexoffice ${label}: ${r.file_name} neu erzeugt${lines}`,\n  existing:          `Etsy → Lexoffice ${label}: ${r.file_name} bereits erzeugt`\n                       + (r.confirmed_at ? ' und importiert' : ' (erneut versendet)'),\n  confirmed:         `Etsy → Lexoffice ${label}: Import bestätigt`,\n  already_confirmed: `Etsy → Lexoffice ${label}: Import war bereits bestätigt`,\n}[r.status] ?? `FEHLER Etsy → Lexoffice ${label}: keine Datei erzeugt`;\n\nconst attach = Boolean(r.csv) && (['preview', 'created', 'regenerated'].includes(r.status)\n  || (r.status === 'existing' && !r.confirmed_at));\nconst fileName = r.status === 'preview'\n  ? String(r.file_name).replace(/\\.csv$/, '_VORSCHAU.csv')\n  : r.file_name;\n\nreturn [{\n  json: {\n    subject,\n    text: r.report_text,\n    has_file: attach,\n    // Antwort für den Webhook (bei Schedule-Läufen nur im Execution-Log)\n    response: {\n      status:    r.status,\n      ok:        r.ok,\n      month:     r.month,\n      file_name: fileName ?? null,\n      errors:    r.errors ?? [],\n      warnings:  r.warnings ?? [],\n      lines:     r.lines ?? [],\n      csv:       r.csv ?? null,\n    },\n  },\n  ...(attach ? {\n    binary: {\n      csv: {\n        data:     Buffer.from(r.csv, 'utf8').toString('base64'),\n        mimeType: 'text/csv',\n        fileName,\n      },\n    },\n  } : {}),\n}];\n"
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000005",
+      "name": "Mail und Datei vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "id": "has-file",
+              "leftValue": "={{ $json.has_file }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000006",
+      "name": "Datei anhängen?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 320]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Export ausführen').first().json.mail.from }}",
+        "toEmail": "={{ $('Export ausführen').first().json.mail.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "attachments": "csv"
+        }
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000007",
+      "name": "Mail mit Datei",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1340, 220],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "smtp"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Export ausführen').first().json.mail.from }}",
+        "toEmail": "={{ $('Export ausführen').first().json.mail.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000008",
+      "name": "Mail ohne Datei",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1340, 420],
+      "credentials": {
+        "smtp": {
+          "id": "SMTP_CREDENTIAL_ID",
+          "name": "smtp"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Antwort für den Webhook (bei Schedule-Läufen nur im Execution-Log)\nreturn [{ json: $('Mail und Datei vorbereiten').first().json.response }];\n"
+      },
+      "id": "f6a7b8c9-0006-0006-0006-000000000009",
+      "name": "Ergebnis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 320]
+    }
+  ],
+  "connections": {
+    "Monatlich am 2. um 7 Uhr": {
+      "main": [
+        [
+          {
+            "node": "Auftrag bestimmen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: manuell": {
+      "main": [
+        [
+          {
+            "node": "Auftrag bestimmen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auftrag bestimmen": {
+      "main": [
+        [
+          {
+            "node": "Export ausführen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export ausführen": {
+      "main": [
+        [
+          {
+            "node": "Mail und Datei vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail und Datei vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Datei anhängen?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Datei anhängen?": {
+      "main": [
+        [
+          {
+            "node": "Mail mit Datei",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mail ohne Datei",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail mit Datei": {
+      "main": [
+        [
+          {
+            "node": "Ergebnis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail ohne Datei": {
+      "main": [
+        [
+          {
+            "node": "Ergebnis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin"
+  },
+  "versionId": "f6a7b8c9-0006-0006-0006-000000000099",
+  "tags": [
+    {
+      "name": "etsy"
+    },
+    {
+      "name": "lexoffice"
+    },
+    {
+      "name": "export"
+    }
+  ]
+}

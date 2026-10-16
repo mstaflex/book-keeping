@@ -5,9 +5,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 const BASE = process.env.N8N_URL ?? 'http://n8n:5678';
 const LOGIN = { email: process.env.TEST_LOGIN_EMAIL, password: process.env.TEST_LOGIN_PASSWORD };
 const DIR = '/workflows';
-// 03 (Notion) läuft offline nicht; 04 und 05 werden aktiviert, damit ihre Formulare erreichbar sind
+// 03 (Notion) läuft offline nicht; 04, 05 und 06 werden aktiviert, damit Formulare
+// und der Webhook von 06 erreichbar sind
 const SKIP = /^03_/;
-const ACTIVATE = /^0[45]_/;
+const ACTIVATE = /^0[456]_/;
 
 let cookie = '';
 async function api(method, path, body) {

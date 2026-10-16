@@ -10,7 +10,7 @@ Automatisierte Buchhaltung und Dokumentenerstellung für kleine Unternehmen, bet
 | `postgres/` | PostgreSQL mit Schema für Bestellungen, Transaktionen, Rechnungen |
 | `config-loader/` | Schreibt die Konfiguration aus Umgebungsvariablen bei jedem Start nach `app_config` |
 | `typst-api/` | FastAPI-Service zur PDF-Generierung via [Typst](https://typst.app) |
-| `n8n/workflows/` | n8n-Workflow-JSONs (Etsy-Sync, Notion-Sync, Rechnungserstellung) |
+| `n8n/workflows/` | n8n-Workflow-JSONs (Etsy-Sync, Notion-Sync, Rechnungserstellung, Lexoffice-Export) |
 
 ## Installation
 
@@ -147,6 +147,7 @@ Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeufe
 | `ETSY_RC_RECIPIENT_NAME`, `_STREET`, `_ZIP`, `_CITY`, `_COUNTRY`, `_VAT_ID` | `etsy_rc.recipient_*` | Empfaenger der Reverse-Charge-Rechnung (Workflow 05), `_ZIP` optional |
 | `ETSY_RC_START_DATE` | `etsy_rc.start_date` | erster Tag, ab dem Workflow 05 abrechnet (`YYYY-MM-DD`) |
 | `ETSY_RC_PAYMENT_NOTE`, `ETSY_RC_NOTE` | `etsy_rc.payment_note`, `etsy_rc.note` | optionale Texte auf der Etsy-Rechnung |
+| `LEXOFFICE_START_MONTH` | `lexoffice.start_month` | erster Monat, den Workflow 06 nach Lexoffice exportiert (`YYYY-MM`) |
 
 Zu den Werten:
 
@@ -155,6 +156,7 @@ Zu den Werten:
 - Empfaenger der Etsy-Rechnung, z.B. `ETSY_RC_RECIPIENT_NAME=Etsy Ireland UC`, `ETSY_RC_RECIPIENT_STREET=One Le Pole Square, Ship Street Great`, `ETSY_RC_RECIPIENT_CITY=Dublin 8`, `ETSY_RC_RECIPIENT_COUNTRY=Irland`, `ETSY_RC_RECIPIENT_VAT_ID=IE9777587C`. Anschrift und USt-IdNr. bitte mit deinen bisherigen Rechnungen an Etsy bzw. einer Etsy-Gebuehrenrechnung abgleichen.
 - `ETSY_RC_START_DATE`: alles davor hast du bereits selbst an Etsy fakturiert; es darf nicht doppelt auf eine Rechnung.
 - `ETSY_SYNC_START` wirkt nur, solange noch kein Abruf gelaufen ist (kein `etsy.receipts_cursor`, leere Tabelle `etsy_transactions`). Danach setzen beide Workflows dort fort, wo sie aufgehoert haben; eine spaetere Aenderung allein holt also nichts nach (siehe [Etsy-Daten neu abrufen](#etsy-daten-neu-abrufen)). Fuer die Reverse-Charge-Rechnung muessen die Bestellungen ab `ETSY_RC_START_DATE` vorliegen, `ETSY_SYNC_START` also spaetestens an diesem Tag beginnen.
+- `LEXOFFICE_START_MONTH`: alle Monate davor sind schon anders in Lexoffice gebucht (z.B. ueber PayJoe) und werden nie exportiert, sonst entstehen Doppelbuchungen.
 
 Werte lassen sich weiterhin auch per SQL oder Adminer in `app_config` eintragen. Sie werden nur dann ueberschrieben, wenn dieselbe Variable gesetzt ist. Den Schluessel `etsy.receipts_cursor` pflegt Workflow 01 selbst (Zeitstempel der zuletzt verarbeiteten Etsy-Aenderung); er ist bewusst keine Variable.
 
@@ -169,6 +171,7 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 | `03_notion_sync.json` | v1 | Synchronisiert Bestellungen nach Notion |
 | `04_generate_invoice_pdf.json` | v1 | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel), per Formular |
 | `05_etsy_reverse_charge_invoice.json` | v1 | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
+| `06_etsy_lexoffice_export.json` | v1 | Monats-CSV des Etsy-Zahlungskontos fuer Lexoffice (ersetzt PayJoe) |
 
 Nach dem Import in jeder Node das passende Credential aus Schritt 3 auswaehlen (die JSONs enthalten nur Platzhalter wie `POSTGRES_CREDENTIAL_ID`) und die Workflows aktivieren.
 
@@ -184,7 +187,7 @@ Workflow 04 hat ein n8n-Formular: im Browser `<n8n-adresse>/form/rechnung` oeffn
 - Bestellungen nur mit digitalen Artikeln, unbekannte Bestellnummern oder fehlende Verkaeuferdaten lehnt das Formular mit einer Meldung ab, ohne eine Nummer zu vergeben.
 - Fuer Skripte gibt es weiterhin den Webhook `POST /webhook/generate-docs` mit Body `{"order_id": "..."}`; er antwortet mit `{"status": "ok", "order_id": "...", "invoice_number": "..."}`.
 
-> **Sicherheit:** Formular und Webhooks haben keine Anmeldung. Wer die Adresse erreicht, kann Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. Ist n8n nur ueber VPN erreichbar, ist das in Ordnung. Ist n8n aus dem Internet erreichbar: im Formular-Trigger unter **Authentication** *Basic Auth* setzen (neuere n8n-Versionen bieten auch *n8n User Auth*, also das n8n-Login) und bei den Webhooks *Header Auth*.
+> **Sicherheit:** Formular und Webhooks haben keine Anmeldung. Wer die Adresse erreicht, kann Rechnungsnummern fuer beliebige Bestellungen vergeben lassen. Ist n8n nur ueber VPN erreichbar, ist das in Ordnung. Ist n8n aus dem Internet erreichbar: im Formular-Trigger unter **Authentication** *Basic Auth* setzen (neuere n8n-Versionen bieten auch *n8n User Auth*, also das n8n-Login) und bei den Webhooks *Header Auth*. Das gilt auch fuer die Webhooks von Workflow 05 (`etsy-rc-invoice`) und 06 (`etsy-lexoffice-export`): Letzterer liefert in der Antwort die Etsy-Buchungen des Monats und kann einen Monat als importiert markieren.
 
 ## Lokal testen
 
@@ -212,7 +215,7 @@ Nicht automatisiert: Wird ein digitaler Verkauf **nach** Rechnungsstellung ersta
 
 ## Etsy-Zahlungskonto (Workflow 02)
 
-Workflow 02 speichert jeden Eintrag des Etsy-Zahlungskontos (Ledger) als Zeile in `etsy_transactions`, Betrag in EUR mit Vorzeichen. `ledger_type`, `reference_type` und `reference_id` sind die Originalangaben von Etsy, `type` ist die Einordnung:
+Workflow 02 speichert jeden Eintrag des Etsy-Zahlungskontos (Ledger) als Zeile in `etsy_transactions`, Betrag in EUR mit Vorzeichen. `ledger_type`, `reference_type`, `reference_id`, `balance` (Etsy-Guthaben nach der Buchung) und `sequence_number` sind die Originalangaben von Etsy, `type` ist die Einordnung:
 
 | `type` | Etsy-`ledger_type` | Bedeutung |
 |---|---|---|
@@ -224,14 +227,15 @@ Workflow 02 speichert jeden Eintrag des Etsy-Zahlungskontos (Ledger) als Zeile i
 | `fee_ads` | `OFFSITE_ADS_FEE` | Offsite Ads |
 | `refund` | `REFUND` | Erstattung |
 | `payout` | `DISBURSE`, `DISBURSE2` | Auszahlung aufs Bankkonto |
-| `transfer` | `BILLING_PAYMENT` | Etsy belastet die hinterlegte Karte, um einen negativen Saldo auszugleichen |
-| `other` | alle anderen | unbekannter Typ: pruefen und in Workflow 02 (`ENTRY_TYPE_MAP`) ergaenzen |
+| `card_payment` | `BILLING_PAYMENT` | Etsy belastet die hinterlegte Karte, um einen negativen Saldo auszugleichen |
+| `unknown` | alle anderen | unbekannter Typ: in Workflow 02 (`ENTRY_TYPE_MAP`) ergaenzen; bis dahin bricht der Lexoffice-Export (Workflow 06) ab |
 
 Fuer die Auswertung:
 
 - **Umsatz ohne die von Etsy erhobene Steuer = Summe aus `sale` und `marketplace_tax`.** Die `marketplace_tax`-Zeilen also nicht herausfiltern, sonst enthaelt der Umsatz die VAT. Bei rein digitalen Bestellungen ergibt das den Betrag, den Workflow 05 an Etsy fakturiert (am Monatsende koennen Ledger-Datum und Bestelldatum in verschiedene Monate fallen).
-- Gebuehren sind alle `fee_*`. `payout` und `transfer` sind Geldbewegungen zwischen Etsy-Konto und Bank bzw. Karte, weder Ertrag noch Aufwand.
-- `order_id` ist nur gesetzt, wenn Etsy den Eintrag direkt einer Bestellung zuordnet (`reference_type = 'receipt'`). Gebuehren verweisen meist auf andere Objekte (`reference_type`/`reference_id`).
+- Gebuehren sind alle `fee_*`. `payout` und `card_payment` sind Geldbewegungen zwischen Etsy-Konto und Bank bzw. Karte, weder Ertrag noch Aufwand.
+- `order_id` setzt Workflow 02 bei Verkaeufen und Erstattungen, notfalls ueber die zugehoerige Zahlung. Gebuehren verweisen auf andere Objekte (`reference_type`/`reference_id`).
+- Fuer Lexoffice fasst Workflow 06 das zu wenigen Monatszeilen zusammen (naechster Abschnitt).
 
 Monatsuebersicht, z.B. in Adminer:
 
@@ -241,8 +245,8 @@ SELECT month,
        SUM(amount) FILTER (WHERE type = 'marketplace_tax')            AS etsy_steuer,
        SUM(amount) FILTER (WHERE type LIKE 'fee%')                    AS gebuehren,
        SUM(amount) FILTER (WHERE type = 'refund')                     AS erstattungen,
-       SUM(amount) FILTER (WHERE type IN ('payout', 'transfer'))      AS geldbewegungen,
-       COUNT(*)    FILTER (WHERE type = 'other')                      AS unbekannt
+       SUM(amount) FILTER (WHERE type IN ('payout', 'card_payment'))      AS geldbewegungen,
+       COUNT(*)    FILTER (WHERE type = 'unknown')                      AS unbekannt
 FROM etsy_transactions
 GROUP BY month
 ORDER BY month;
@@ -250,21 +254,61 @@ ORDER BY month;
 
 ### Etsy-Daten neu abrufen
 
-Workflow 01 merkt sich die zuletzt verarbeitete Aenderung (`etsy.receipts_cursor`), Workflow 02 setzt beim juengsten gespeicherten Ledger-Eintrag fort. Aeltere Daten holen beide nur nach, wenn man ihren Startpunkt zuruecksetzt, z.B. um Bestellungen vor dem ersten Abruf nachzuladen oder nach Migration 004 alle Ledger-Eintraege mit `ledger_type` und Referenz neu einzuordnen:
+Workflow 01 merkt sich die zuletzt verarbeitete Aenderung (`etsy.receipts_cursor`), Workflow 02 setzt beim juengsten gespeicherten Ledger-Eintrag fort. Aeltere Zeilen ohne Etsy-Rohdaten (aus frueheren Versionen von Workflow 02, bis 400 Tage zurueck) und Zeilen mit Typ `unknown` holt Workflow 02 von selbst erneut ab und ordnet sie neu ein.
+
+Bestellungen vor dem ersten Abruf nachladen:
 
 1. `ETSY_SYNC_START` auf den ersten gewuenschten Tag setzen und `docker compose up -d` ausfuehren.
-2. Startpunkte zuruecksetzen (Adminer oder psql):
+2. Den Cursor loeschen (Adminer oder psql), dann beginnt Workflow 01 beim naechsten Lauf bei `ETSY_SYNC_START`:
 
    ```sql
-   -- Bestellungen: Workflow 01 beginnt beim naechsten Lauf bei ETSY_SYNC_START
    DELETE FROM app_config WHERE scope = 'etsy' AND key = 'receipts_cursor';
-   -- Ledger: Workflow 02 beginnt nur bei leerer Tabelle bei ETSY_SYNC_START
-   DELETE FROM etsy_transactions;
    ```
 
-3. Die Workflows laufen nach Zeitplan oder per **Execute workflow** in n8n.
+Bestellungen werden dabei nur aktualisiert, nicht dupliziert; Rechnungsnummern und die Markierung fuer die Etsy-Rechnung bleiben unberuehrt. Fuer das Ledger wirkt `ETSY_SYNC_START` nur bei leerer Tabelle `etsy_transactions`. Die Tabelle nicht leeren, sobald Lexoffice-Exporte (Workflow 06) existieren: Export und Bestaetigung beziehen sich auf die gespeicherten Buchungen.
 
-Bestellungen werden dabei nur aktualisiert, nicht dupliziert; Rechnungsnummern und die Markierung fuer die Etsy-Rechnung bleiben unberuehrt. Ledger-Eintraege kommen mit derselben `transaction_id` zurueck. Das Leeren von `etsy_transactions` nur, solange nichts anderes auf diese Tabelle aufbaut (z.B. ein Export, der `lexoffice_synced` setzt).
+## Etsy-Zahlungskonto → Lexoffice (Workflow 06)
+
+Ersetzt PayJoe. Aus `etsy_transactions` entsteht pro abgeschlossenem Monat eine kleine CSV fuer ein Lexoffice-Konto ohne Anbindung („Etsy-Zahlungskonto“), mit wenigen Summenzeilen statt einer Zeile je Etsy-Buchung:
+
+| Zeile | Anzahl | Betrag | In Lexoffice zuordnen zu |
+|---|---|---|---|
+| Digitale Verkaeufe netto (Verkauf minus Etsy-VAT) | 1, Monatsletzter | + | Proformarechnung an Etsy (Workflow 05); ihre Nummer steht im Verwendungszweck |
+| Etsy-Gebuehren | 1, Monatsletzter | − | Etsy-Gebuehrenrechnung |
+| Auszahlung | je Auszahlung | − | Geldtransit mit dem Eingang auf dem Bankkonto |
+| Kartenzahlung an Etsy (billing_payment) | je Zahlung | + | je nach Karte |
+| Physischer Verkauf | je Bestellung | + brutto | Kundenrechnung (Workflow 04) |
+
+Buchungslogik, Kontrollen und offene Punkte im Detail: [docs/lexoffice-etsy-export.md](docs/lexoffice-etsy-export.md).
+
+**Ablauf je Monat** (Webhook `POST /webhook/etsy-lexoffice-export`):
+
+1. **Vorschau** (schreibt nichts): Body `{"month": "2026-09"}`. Per Mail kommen Pruefbericht und `etsy_lexoffice_2026-09_VORSCHAU.csv`; mit dem Etsy-Zahlungskonto-Auszug und der Proformarechnung vergleichen.
+2. **Erzeugen**: `{"month": "2026-09", "action": "create"}`. Laeuft automatisch am 2. jedes Monats um 7 Uhr fuer den Vormonat (nach Workflow 05 am 1.). Per Mail kommt `etsy_lexoffice_2026-09.csv`. Erneutes Ausfuehren liefert dieselbe Datei; neu erzeugt wird sie nur mit `"regenerate": true` und nur, solange der Import nicht bestaetigt ist.
+3. In Lexoffice beim Etsy-Zahlungskonto **einmal** importieren (Lexoffice erkennt keine Dubletten, ein Import laesst sich nicht rueckgaengig machen).
+4. **Bestaetigen**: `{"month": "2026-09", "action": "confirm"}`. Erst jetzt wird `lexoffice_synced` fuer die enthaltenen Etsy-Buchungen gesetzt.
+
+Eine Datei entsteht nur, wenn alle Kontrollen bestehen: Monat abgeschlossen und nicht vor `LEXOFFICE_START_MONTH`, keine unbekannten Etsy-Buchungstypen, Erloeszeile gleich Betrag der Proformarechnung, Summe der Zeilen gleich Summe der Etsy-Buchungen, keine Luecke gegenueber Etsys eigenem Kontostand. Sonst nennt die Mail die Gruende. Stammt die Proformarechnung eines Monats nicht aus Workflow 05 (z.B. vor `ETSY_RC_START_DATE` von Hand geschrieben), deren Nummer als `"proforma_number"` mitgeben.
+
+Dasselbe geht im Terminal (Worker-User, wie n8n):
+
+```bash
+q() { docker exec -i orderdb sh -c 'psql -X -At -U "$(cat /run/secrets/db_worker_user.txt)" -d "$(cat /run/secrets/db_name.txt)"' <<< "$1"; }
+q "SELECT lexoffice_export_build('2026-09')->>'report_text'"     # Vorschau mit Pruefbericht, schreibt nichts
+q "SELECT lexoffice_export_create('2026-09')->>'report_text'"    # Datei erzeugen
+# Datei byte-genau holen (psql haengt sonst einen Zeilenumbruch an)
+q "SELECT encode(convert_to(csv, 'UTF8'), 'base64') FROM lexoffice_exports
+   WHERE month = '2026-09' AND superseded_at IS NULL" | base64 -d > etsy_lexoffice_2026-09.csv
+q "SELECT lexoffice_export_confirm('2026-09')->>'report_text'"   # nach dem Import bestaetigen
+```
+
+**Einrichtung:**
+
+1. Migration `004_lexoffice_export.sql` einspielen („Updates einspielen“, Schritt 3).
+2. Workflow 02 neu importieren. Er speichert jetzt Etsys Originaldaten je Buchung (Typ, Kontostand) und traegt bei Verkaeufen die Bestellnummer nach, damit digitale und physische Verkaeufe getrennt werden koennen. Beim ersten Lauf ergaenzt er das automatisch fuer die vorhandenen Buchungen.
+3. `LEXOFFICE_START_MONTH` setzen (Schritt 5): der erste Monat, den PayJoe noch nicht nach Lexoffice gebracht hat.
+4. In Lexoffice ein Konto ohne Anbindung fuer das Etsy-Guthaben anlegen.
+5. Workflow 06 importieren, Credentials zuweisen, eine Vorschau fuer den ersten Monat erzeugen und pruefen. Beim ersten Import in Lexoffice die Spalten Datum, Betrag und Verwendungszweck zuordnen und die Vorschau dort genau ansehen. Danach Workflow 06 aktivieren.
 
 ## Datenbank im Browser ansehen (Adminer)
 
@@ -315,7 +359,7 @@ Nach einem `git pull` auf dem Server:
    docker exec typst-api curl -s localhost:8080/health   # templates_sha zeigt den laufenden Template-Stand
    ```
 
-3. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume. Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
+3. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume (zusammen mit allen Migrationen). Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
 
    ```bash
    for f in postgres/migrations/*.sql; do
@@ -323,11 +367,13 @@ Nach einem `git pull` auf dem Server:
    done
    ```
 
-   Migration 004 ordnet bestehende Ledger-Zeilen neu ein (Listing-Verlaengerungen, Kartenbelastungen), soweit das aus der gespeicherten Beschreibung moeglich ist. `ledger_type` und die Referenz auf Bestellung bzw. Gebuehr bekommen alte Zeilen erst durch einen Neu-Abruf ([Etsy-Daten neu abrufen](#etsy-daten-neu-abrufen)).
+   Bestehende Ledger-Zeilen ergaenzt und ordnet Workflow 02 danach bei seinem naechsten Lauf selbst neu ein (Etsy-Rohdaten, Listing-Verlaengerungen, Kartenbelastungen).
 
 4. **Alles neu starten:** `docker compose up -d --build`. Das baut die Images neu und schreibt die Konfiguration erneut.
 
 5. **Workflows neu importieren**, deren Version sich geaendert hat, und Credentials wieder zuweisen (Schritt 6, *Aktualisieren*).
+
+Die Datenbanklogik (z.B. der Lexoffice-Export) hat Tests. Sie laufen in einem Wegwerf-Container, nie gegen die echte Datenbank: `postgres/tests/run.sh`.
 
 ## Datensicherung
 

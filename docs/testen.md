@@ -7,9 +7,10 @@ Außenwelt:
 
 | Im Betrieb | In der Testumgebung |
 |---|---|
-| Etsy-API | `test/etsy-mock`: beantwortet dieselben URLs mit Testbestellungen und Ledger-Einträgen |
+| Etsy-API | `test/etsy-mock`: beantwortet dieselben URLs mit Testbestellungen, Ledger-Einträgen und Zahlungen |
 | Mailserver | Mailpit: fängt alle Mails ab und zeigt sie im Browser |
 | Notion | nicht enthalten (Workflow 03 wird nicht importiert) |
+| Lexoffice | nicht enthalten; Workflow 06 erzeugt die CSV, importiert wird sie nicht |
 | Credentials von Hand anlegen | `test/n8n-setup`: legt Login, Credentials und Workflows automatisch an |
 | Umgebungsvariablen im Hosting-Panel | `test/test.env` mit ausgedachten Werten |
 
@@ -40,9 +41,9 @@ docker compose -f test/docker-compose.yml logs -f n8n-setup     # bis "importier
 | Mails | http://localhost:8025 | – |
 | Adminer | http://localhost:8081 | Server `orderdb`, Benutzer `worker`, Passwort `test-worker-pw`, Datenbank `orderdb` |
 
-Importiert werden die Workflows 01, 02, 04 und 05. Aktiv sind nur 04 und 05,
-damit ihre Formulare erreichbar sind. 01 und 02 startest du von Hand, damit
-du siehst, was passiert.
+Importiert werden die Workflows 01, 02, 04, 05 und 06. Aktiv sind 04, 05 und
+06, damit Formulare und Webhook erreichbar sind. 01 und 02 startest du von
+Hand, damit du siehst, was passiert.
 
 ## Testdaten
 
@@ -61,9 +62,12 @@ ausgedacht.
 | 2003 | Vormonat | physisch, versandt mit Sendungsnummer | Rechnung + Lieferschein mit Sendungsnummer |
 | 2004 | Vormonat | digital, Österreich (20 % VAT) | 12,00 € auf der Etsy-Rechnung |
 
-Dazu im Ledger: Gebühren je Bestellung, Listing-Verlängerungen, eine
-Auszahlung, eine Kartenbelastung (`billing_payment`) und ein unbekannter Typ
-(`shipping_labels`), der im Prüfbericht als „unbekannt“ auftauchen soll.
+Dazu im Ledger, mit laufendem Kontostand wie bei Etsy: Gebühren je Bestellung,
+Listing-Verlängerungen, eine Auszahlung, eine Kartenbelastung
+(`billing_payment`) und ein unbekannter Typ (`shipping_labels`, laufender
+Monat), der im Prüfbericht als „unbekannt“ auftauchen soll. Verkäufe und VAT
+verweisen wie bei Etsy auf die Zahlung; Workflow 02 holt die Bestellnummer
+über den Zahlungs-Abruf nach.
 
 ## Ablauf
 
@@ -71,6 +75,7 @@ Auszahlung, eine Kartenbelastung (`billing_payment`) und ein unbekannter Typ
    **Execute workflow**. Danach stehen die 8 Bestellungen in `orders`
    (Adminer oder Prüfbericht).
 2. **Ledger abrufen:** „02 · Etsy Transactions Sync“, **Execute workflow**.
+   Danach haben alle Verkäufe eine Bestellnummer (`order_id`).
 3. **Rechnung und Lieferschein:** http://localhost:5678/form/rechnung öffnen
    und nacheinander 1001, 1003, 1004, 2003 eintragen. Jede Seite bietet beide
    PDFs zum Download an, Mailpit zeigt je eine Mail mit zwei Anhängen.
@@ -83,7 +88,24 @@ Auszahlung, eine Kartenbelastung (`billing_payment`) und ein unbekannter Typ
    versendet“ mit derselben Nummer. Der laufende Monat wird abgelehnt.
    Alternativ in n8n „05 · …“ öffnen und **Execute workflow** am Zeitplan-
    Trigger: das ist genau der Lauf vom 1. des Monats.
-5. **Prüfbericht:**
+5. **Lexoffice-Export für den Vormonat** (Workflow 06, nach Schritt 3 und 4).
+   Vorschau, Erzeugen und Bestätigen per Webhook, `<monat>` = Vormonat:
+
+   ```bash
+   e() { curl -s -X POST http://localhost:5678/webhook/etsy-lexoffice-export \
+           -H 'content-type: application/json' -d "$1"; echo; }
+   e '{"month": "<monat>"}'                          # Vorschau, schreibt nichts
+   e '{"month": "<monat>", "action": "create"}'      # Datei erzeugen
+   e '{"month": "<monat>", "action": "confirm"}'     # Import bestätigen
+   ```
+
+   Erwartet: 4 Zeilen – physischer Verkauf 2003 mit 16,95 € brutto, die
+   Auszahlung −40,00 €, digitale Verkäufe netto 27,00 € mit der Nummer der
+   Etsy-Rechnung aus Schritt 4 und die Etsy-Gebühren als eine Summe. Hinweis
+   zur Erstattung bei 2002, keine Fehler. Ein zweites `create` liefert dieselbe
+   Datei. Ohne Etsy-Rechnung aus Schritt 4 bricht der Export ab, weil die
+   Erlöszeile nicht zur Rechnung passt. Mails mit CSV in Mailpit.
+6. **Prüfbericht:**
 
    ```bash
    test/report.sh
@@ -133,4 +155,6 @@ test/report.sh --prod
   aussagekräftig ist. `test/n8n-setup/setup.mjs` nutzt die interne REST-API
   von n8n; bei einem großen Versionssprung kann sie sich ändern.
 - Notion (Workflow 03) und die echte Etsy-Anmeldung (OAuth) sind nicht Teil
-  des Tests.
+  des Tests, der Import in Lexoffice selbst ebenfalls nicht.
+- Die Datenbanklogik des Lexoffice-Exports hat zusätzlich eigene Tests:
+  `postgres/tests/run.sh`.

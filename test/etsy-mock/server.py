@@ -8,6 +8,7 @@ Betrieb.
 Beantwortet nur, was die Workflows 01 und 02 abfragen:
   GET /v3/application/shops/<id>/receipts
   GET /v3/application/shops/<id>/payment-account/ledger-entries
+  GET /v3/application/shops/<id>/payment-account/ledger-entries/payments
 Die Testdaten erzeugt fixtures.py, relativ zum aktuellen Monat.
 """
 import json
@@ -74,6 +75,11 @@ class Handler(BaseHTTPRequestHandler):
             key = 'updated_timestamp' if q.get('sort_on') == 'updated' else 'created_timestamp'
             rows.sort(key=lambda r: r[key], reverse=q.get('sort_order', 'desc') in ('desc', 'down'))
             return self.send_json(200, self.page(rows, q))
+
+        if u.path.endswith('/payment-account/ledger-entries/payments'):
+            ids = set(q.get('ledger_entry_ids', '').split(','))
+            rows = fixtures.payments(ids)
+            return self.send_json(200, {'count': len(rows), 'results': rows})
 
         if u.path.endswith('/payment-account/ledger-entries'):
             if 'min_created' not in q or 'max_created' not in q:

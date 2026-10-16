@@ -14,7 +14,7 @@ Sonderfälle, die die Workflows abdecken müssen:
   2002  Vormonat, digital, storniert und erstattet             → nie auf einer Etsy-Rechnung
   2003  Vormonat, physisch, versandt mit Sendungsnummer        → 04 mit Tracking
   2004  Vormonat, digital, Käuferin in Österreich (20 % VAT)   → 05 Vormonat
-Dazu im Ledger: Auszahlung, Kartenbelastung, Verlängerungsgebühren und ein
+Dazu im Ledger (mit laufendem Kontostand): Auszahlung, Kartenbelastung, Verlängerungsgebühren und ein
 unbekannter Typ (shipping_labels), der im Prüfbericht unter "unbekannt" auftaucht.
 """
 from datetime import datetime, timedelta
@@ -65,6 +65,9 @@ CASES = [
 ]
 
 
+PAYMENTS = {}   # payment_id → receipt_id
+
+
 def _build():
     receipts, ledger = [], []
     seq = [0]
@@ -103,7 +106,10 @@ def _build():
             'shipments': [{'tracking_code': shipment[0], 'carrier_name': shipment[1]}] if shipment else [],
         })
         pay = ts + timedelta(minutes=1)
-        entry(pay, 'PAYMENT_GROSS', grand, 'receipt', rid)
+        # Wie bei Etsy: der Verkauf verweist auf die Zahlung, nicht auf die
+        # Bestellung; Workflow 02 holt die Bestellnummer über /payments nach
+        PAYMENTS[rid + 50000] = rid
+        entry(pay, 'PAYMENT_GROSS', grand, 'payment', rid + 50000)
         if vat:
             entry(pay, 'VAT_TAX_EP', -vat, 'payment', rid + 50000)
         for i, (lid, _, q, p, _) in enumerate(items):
@@ -111,13 +117,23 @@ def _build():
             entry(pay, 'renew_sold', -0.18 * q, 'listing', lid)
         entry(pay, 'PAYMENT_PROCESSING_FEE', -round(grand * 0.04 + 0.30, 2), 'payment', rid + 50000)
         if status == 'Canceled':
-            entry(ts + timedelta(days=1), 'REFUND', -grand, 'receipt', rid)
+            # Erstattung an den Käufer; Etsy bucht die einbehaltene VAT zurück
+            entry(ts + timedelta(days=1), 'REFUND', -grand, 'payment', rid + 50000)
+            if vat:
+                entry(ts + timedelta(days=1), 'VAT_TAX_EP', vat, 'payment', rid + 50000)
 
     entry(last_month(2), 'auto_renew_expired', -0.18, 'listing', 701)
     entry(last_month(3), 'renew_expired', -0.18, 'listing', 702)
     entry(last_month(26), 'DISBURSE2', -40.00, 'disbursement', 900001)
     entry(this_month(0.1), 'billing_payment', 5.00, 'shop_payment', 900002)
     entry(this_month(0.5), 'shipping_labels', -3.99, 'etsy', 900003)
+
+    # Reihenfolge und laufender Kontostand wie im Etsy-Zahlungskonto; der
+    # Lexoffice-Export (Workflow 06) prüft, dass keine Buchung fehlt
+    balance = 0
+    for i, e in enumerate(sorted(ledger, key=lambda e: (e['create_date'], e['entry_id'])), start=1):
+        balance += e['amount']
+        e['sequence_number'], e['balance'] = i, balance
     return receipts, ledger
 
 
@@ -130,6 +146,16 @@ def receipts():
 
 def ledger():
     return [dict(e) for e in _LEDGER]
+
+
+def payments(entry_ids):
+    """Zahlungen zu Ledger-Einträgen (getPaymentAccountLedgerEntryPayments)."""
+    out = []
+    for e in _LEDGER:
+        if str(e['entry_id']) in entry_ids and e['reference_type'] == 'payment' and int(e['reference_id']) in PAYMENTS:
+            out.append({'payment_id': int(e['reference_id']), 'receipt_id': PAYMENTS[int(e['reference_id'])],
+                        'shop_id': 12345678, 'currency': 'EUR'})
+    return out
 
 
 if __name__ == '__main__':
