@@ -139,7 +139,10 @@ services:
     environment:
       ADMINER_DEFAULT_SERVER: orderdb
     ports:
-      - "127.0.0.1:8081:8080"
+      # Standard nur 127.0.0.1 (Zugriff per SSH-Tunnel). ADMINER_BIND darf auf
+      # die Adresse eines privaten VPN-Interfaces des Servers zeigen, nie auf
+      # 0.0.0.0 oder eine öffentliche Adresse.
+      - "${ADMINER_BIND:-127.0.0.1}:8081:8080"
     networks:
       - n8n-backend
       # Ist n8n-backend als internes Netz angelegt (--internal), veröffentlicht

@@ -355,6 +355,8 @@ Vorsicht bei Aenderungen von Hand: `invoice_counter` und `orders.invoice_number`
 
 Lauscht nach dem Start nichts auf `127.0.0.1:8081`: `docker ps -a --filter name=adminer` zeigt, ob der Container laeuft und ob die Freigabe steht (`127.0.0.1:8081->8080/tcp`), `docker logs adminer` den Grund. Steht dort nur `8080/tcp`, haengt der Container an keinem nicht-internen Netz (ein mit `--internal` angelegtes `n8n-backend` gibt keine Ports frei); dafuer ist das zusaetzliche Netz `adminer-access` da, also den Container mit der aktuellen `docker-compose.yml` neu anlegen (`--force-recreate`). Den Befehl im selben Verzeichnis bzw. mit demselben Projektnamen ausfuehren wie den Stack (`docker compose ls` zeigt beides; sonst `-p <projektname>`), sonst legt Compose ein zweites Projekt an und scheitert am schon vergebenen Containernamen `orderdb`.
 
+Ist der Server nur ueber ein eigenes VPN erreichbar, kann Adminer statt an `127.0.0.1` an die VPN-Adresse des Servers gebunden werden: `ADMINER_BIND=<vpn-adresse-des-servers>` in der `.env` bzw. den Umgebungsvariablen des Projekts, dann `docker compose --profile tools up -d --force-recreate adminer`. Adminer ist dann fuer jedes Geraet in diesem VPN ohne Tunnel erreichbar, geschuetzt nur durch das Datenbank-Passwort; das passt nur, wenn das VPN allein dir gehoert.
+
 Den Port nie auf `0.0.0.0` umstellen oder ueber einen oeffentlichen Reverse-Proxy freigeben: Das waere eine Anmeldeseite zur Buchhaltungs-DB direkt im Internet. Unterstuetzt ein Deploy-Werkzeug keine Compose-Profile, startet Adminer mit dem Stack, bleibt aber auf `127.0.0.1` begrenzt; dann bei Nichtgebrauch stoppen.
 
 ## Updates einspielen

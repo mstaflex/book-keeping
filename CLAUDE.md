@@ -117,8 +117,10 @@ does not receive mail; it only links commits to the GitHub profile.
 - **Network:** Postgres and `typst-api` stay inside the Docker network
   `n8n-backend`; do not publish their ports in `docker-compose.yml`. The only
   published port is the optional Adminer UI (profile `tools`) on
-  `127.0.0.1:8081`, reached via SSH tunnel. Never bind it to `0.0.0.0`, drop
-  the IP, or route it through a public reverse proxy.
+  `127.0.0.1:8081`, reached via SSH tunnel. `ADMINER_BIND` may point it at a
+  private VPN interface instead; set it only in the server's environment,
+  never commit that address. Never bind it to `0.0.0.0`, drop the IP, or route
+  it through a public reverse proxy.
 - **typst-api** rejects unknown request fields (`extra="forbid"`); keep that,
   so an outdated image fails loudly instead of rendering incomplete invoices.
 
