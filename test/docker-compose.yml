@@ -109,7 +109,8 @@ services:
     depends_on:
       n8n:
         condition: service_healthy
-    entrypoint: ["sh", "/setup/setup.sh"]
+    # tr: CR-Zeichen eines Windows-Checkouts entfernen
+    entrypoint: ["sh", "-c", "tr -d '\\r' < /setup/setup.sh | sh"]
     env_file: test.env
     environment:
       <<: *n8n-env
@@ -122,6 +123,8 @@ services:
 
   adminer:
     image: adminer:5.5.1
+    # IPv4 statt [::] (Standard des Images): läuft so auch ohne IPv6
+    command: ["php", "-S", "0.0.0.0:8080", "-t", "/var/www/html"]
     environment:
       ADMINER_DEFAULT_SERVER: orderdb
     ports:

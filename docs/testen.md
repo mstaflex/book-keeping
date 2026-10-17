@@ -137,6 +137,15 @@ die Steuerschuldnerschaft des Leistungsempfängers.
 
 Beenden ohne Daten zu löschen: `docker compose -f test/docker-compose.yml down`.
 
+## Fehlersuche
+
+| Meldung | Ursache und Lösung |
+|---|---|
+| `service "bootstrap" didn't complete successfully: exit 2`, im Log `set: illegal option -` | Die Skripte haben Windows-Zeilenenden (CRLF), weil Git sie unter Windows so auscheckt. Seit `.gitattributes` im Repo liegt und die Images CR-Zeichen entfernen, passiert das nicht mehr. Nach dem Update einmal sauber neu starten: `docker compose -f test/docker-compose.yml down -v`, dann `up -d --build`. |
+| `test/report.sh` meldet `$'\r': command not found` | Die Arbeitskopie hat noch CRLF von einem älteren Checkout. Neu auschecken: `git rm -rq --cached . && git reset -q --hard` (verwirft lokale Änderungen an versionierten Dateien). Unter Windows `test/report.sh` in Git Bash oder WSL ausführen. |
+| `port is already allocated` | 5678, 8025 oder 8081 sind belegt, z.B. durch eine andere n8n-Instanz. Diese stoppen oder den linken Teil der Port-Angabe in `test/docker-compose.yml` ändern. |
+| Ein Container fehlt oder ist beendet | `docker compose -f test/docker-compose.yml ps -a` zeigt den Status, `docker compose -f test/docker-compose.yml logs <service>` den Grund. |
+
 ## Prüfbericht im Betrieb
 
 `test/report.sql` funktioniert auch mit der echten Datenbank und ändert dort

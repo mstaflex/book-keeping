@@ -1,0 +1,10 @@
+# Alle Textdateien mit LF auschecken, auch unter Windows (core.autocrlf).
+# Shell-Skripte laufen in Linux-Containern; mit CRLF bricht sh dort sofort ab
+# ("set: illegal option -").
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.ttf  binary
+*.otf  binary
