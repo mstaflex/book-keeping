@@ -325,7 +325,7 @@ Adminer lauscht nur auf `127.0.0.1:8081` des Servers, also nicht im Internet. Zu
 ssh -L 8081:127.0.0.1:8081 <user>@<dein-server>
 ```
 
-Dann im Browser `http://localhost:8081` oeffnen und anmelden:
+Dann im Browser `http://localhost:8081/?pgsql=orderdb` oeffnen (waehlt PostgreSQL vor) und anmelden. Steht *System* auf MySQL, meldet Adminer "Connection refused":
 
 | Feld | Wert |
 |---|---|

@@ -5,7 +5,8 @@
 #
 #   n8n      http://localhost:5678   Login: test@example.org / Testpass123
 #   Mails    http://localhost:8025   (Mailpit fängt alle Mails ab)
-#   Adminer  http://localhost:8081   (Server orderdb, Benutzer worker / test-worker-pw)
+#   Adminer  http://localhost:8081/?pgsql=orderdb&username=worker&db=orderdb
+#            (System PostgreSQL, Passwort test-worker-pw)
 #
 # Enthält die echten Bausteine (bootstrap, Postgres-Schema, Config-Loader,
 # typst-api, Workflows aus n8n/workflows/) plus Etsy-Mock und Mailpit.
