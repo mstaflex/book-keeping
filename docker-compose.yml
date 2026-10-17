@@ -140,10 +140,15 @@ services:
       - "127.0.0.1:8081:8080"
     networks:
       - n8n-backend
+      # Ist n8n-backend als internes Netz angelegt (--internal), veröffentlicht
+      # Docker dort keine Ports; über dieses zusätzliche Netz klappt die
+      # Freigabe auf 127.0.0.1. Postgres und typst-api hängen nicht daran.
+      - adminer-access
 
 networks:
   n8n-backend:
     external: true
+  adminer-access: {}
 
 # ---------------------------------------------------------------------------
 # Volumes mit festen Namen, als "external" markiert: Compose legt sie nie
