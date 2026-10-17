@@ -127,6 +127,9 @@ services:
   adminer:
     image: adminer:5.5.1
     profiles: ["tools"]
+    # IPv4 statt [::] (Standard des Images): ohne IPv6 im Container beendet sich
+    # Adminer sonst sofort ("Failed to listen on [::]:8080")
+    command: ["php", "-S", "0.0.0.0:8080", "-t", "/var/www/html"]
     restart: "no"
     container_name: adminer
     depends_on:
