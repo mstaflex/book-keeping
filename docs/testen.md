@@ -91,9 +91,9 @@ verweisen wie bei Etsy auf die Zahlung; Workflow 02 holt die Bestellnummer
 4. **Monatsrechnung an Etsy:** http://localhost:5678/form/etsy-rechnung, Feld
    leer lassen (= Vormonat). Erwartet: eine neue Rechnung über 27,00 € mit
    2 Verkäufen (2001 und 2004). Ein zweites Mal: „Bereits angelegt, erneut
-   versendet“ mit derselben Nummer. Die Nummer folgt dem Monat, also
-   `RE-E-<Jahr>-<Vormonat>`; die Kundenrechnungen aus Schritt 3 zählen davon
-   unabhängig weiter. Der laufende Monat wird abgelehnt.
+   versendet“ mit derselben Nummer. Die Nummer kommt aus dem eigenen
+   Zähler der Etsy-Rechnungen, also `RE-E-<Jahr>-01`; die Kundenrechnungen aus
+   Schritt 3 zählen davon unabhängig. Der laufende Monat wird abgelehnt.
    Alternativ in n8n „05 · …“ öffnen und **Execute workflow** am Zeitplan-
    Trigger: das ist genau der Lauf vom 1. des Monats.
 5. **Lexoffice-Export für den Vormonat** (Workflow 06, nach Schritt 3 und 4).

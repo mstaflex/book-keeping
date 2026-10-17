@@ -147,7 +147,7 @@ Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeufe
 | `ETSY_RC_RECIPIENT_NAME`, `_STREET`, `_ZIP`, `_CITY`, `_COUNTRY`, `_VAT_ID` | `etsy_rc.recipient_*` | Empfaenger der Reverse-Charge-Rechnung (Workflow 05), `_ZIP` optional |
 | `ETSY_RC_START_DATE` | `etsy_rc.start_date` | erster Tag, ab dem Workflow 05 abrechnet (`YYYY-MM-DD`) |
 | `INVOICE_NUMBER_FORMAT` | `invoice.number_format` | optional: Muster der Kundenrechnungsnummer (Workflow 04), `{YYYY}` = Jahr, `{NNN}` = laufender Zaehler des Jahres mit so vielen Stellen wie `N`; Standard `BC-E-{YYYY}-{NNN}` (z.B. `BC-E-2026-004`) |
-| `ETSY_RC_NUMBER_FORMAT` | `etsy_rc.number_format` | optional: Muster der Rechnungsnummer, `{YYYY}` und `{MM}` = abgerechneter Monat; Standard `RE-E-{YYYY}-{MM}` (z.B. `RE-E-2026-09`) |
+| `ETSY_RC_NUMBER_FORMAT` | `etsy_rc.number_format` | optional: Muster der Nummer der Etsy-Rechnung, `{YYYY}` = Jahr der Rechnungsstellung, `{NN}` = eigener laufender Zaehler der Etsy-Rechnungen im Jahr; Standard `RE-E-{YYYY}-{NN}` (z.B. `RE-E-2026-06`) |
 | `ETSY_RC_PAYMENT_NOTE`, `ETSY_RC_NOTE` | `etsy_rc.payment_note`, `etsy_rc.note` | optionale Texte auf der Etsy-Rechnung |
 | `LEXOFFICE_START_MONTH` | `lexoffice.start_month` | erster Monat, den Workflow 06 nach Lexoffice exportiert (`YYYY-MM`) |
 
@@ -172,7 +172,7 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 | `02_etsy_transactions_sync.json` | v1 | Synchronisiert Etsy-Transaktionen (Gebuehren, Auszahlungen) alle 6 Stunden |
 | `03_notion_sync.json` | v1 | Synchronisiert Bestellungen nach Notion |
 | `04_generate_invoice_pdf.json` | v2 | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel), per Formular |
-| `05_etsy_reverse_charge_invoice.json` | v2 | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
+| `05_etsy_reverse_charge_invoice.json` | v3 | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
 | `06_etsy_lexoffice_export.json` | v1 | Monats-CSV des Etsy-Zahlungskontos fuer Lexoffice (ersetzt PayJoe) |
 
 Nach dem Import in jeder Node das passende Credential aus Schritt 3 auswaehlen (die JSONs enthalten nur Platzhalter wie `POSTGRES_CREDENTIAL_ID`) und die Workflows aktivieren.
@@ -216,7 +216,14 @@ Bei digitalen Artikeln gilt Etsy gegenueber dem Kaeufer als Verkaeufer (Art. 9a 
 - **Wann:** am 1. jedes Monats um 6 Uhr (Europe/Berlin) fuer den Vormonat. Manuell ueber das Formular `<n8n-adresse>/form/etsy-rechnung` (Feld *Monat* im Format `YYYY-MM`, leer = Vormonat; das PDF steht danach zum Download bereit) oder per `POST /webhook/etsy-rc-invoice` mit Body `{"month": "2026-09"}`, ohne `month` gilt der Vormonat. Laufende oder kuenftige Monate werden abgelehnt.
 - **Welche Bestellungen:** alle nicht stornierten Etsy-Bestellungen mit mindestens einem digitalen Artikel, die noch auf keiner Etsy-Rechnung stehen, Bestelldatum (deutsche Zeit) ab `start_date` bis Monatsende. Verspaetet synchronisierte Bestellungen aus Vormonaten landen dadurch automatisch auf der naechsten Rechnung; der Leistungszeitraum beginnt dann beim aeltesten Verkauf.
 - **Betrag je Bestellung:** der Verkaufspreis ohne die von Etsy erhobene VAT. Etsys `subtotal` (Artikel nach Gutschein, ohne VAT und Versand) entspricht genau Brutto minus VAT. Bei gemischten Bestellungen zaehlt nur der digitale Anteil, der Gutschein wird anteilig verteilt. Die physischen Artikel derselben Bestellung rechnet Workflow 04 identisch ab, zusammen ergibt das wieder den `subtotal`.
-- **Ergebnis:** Rechnung mit eigener Nummer je Monat nach `ETSY_RC_NUMBER_FORMAT` (Standard `RE-E-2026-09` fuer September 2026; der Zaehler der Kundenrechnungen bleibt unberuehrt). Monate ohne digitale Verkaeufe haben keine Rechnung und damit auch keine Nummer. Gespeichert in `etsy_rc_invoices` mit eingefrorenen Positionen, Verkaeufer- und Empfaengerdaten. Die Bestellungen werden in `orders.etsy_rc_invoice_number` markiert. Das PDF geht per E-Mail raus, mit Abgleichwerten fuer das Etsy-Zahlungskonto (gezahlt inkl. VAT, davon VAT).
+- **Ergebnis:** Rechnung mit Nummer aus einem eigenen Nummernkreis (`etsy_rc_invoice_counter`, je Jahr ab 1, Format `ETSY_RC_NUMBER_FORMAT`, Standard `RE-E-{YYYY}-{NN}`), unabhaengig von den Kundenrechnungen. Der Zaehler steigt nur, wenn eine Rechnung entsteht; Monate ohne digitale Verkaeufe verbrauchen keine Nummer. Wurden in diesem Jahr schon Etsy-Rechnungen von Hand geschrieben, den Zaehler einmalig auf die letzte Nummer setzen, z.B. nach `RE-E-2026-06`:
+
+  ```sql
+  INSERT INTO etsy_rc_invoice_counter (year, last_nr) VALUES (2026, 6)
+  ON CONFLICT (year) DO UPDATE SET last_nr = GREATEST(etsy_rc_invoice_counter.last_nr, EXCLUDED.last_nr);
+  ```
+
+- Gespeichert in `etsy_rc_invoices` mit eingefrorenen Positionen, Verkaeufer- und Empfaengerdaten. Die Bestellungen werden in `orders.etsy_rc_invoice_number` markiert. Das PDF geht per E-Mail raus, mit Abgleichwerten fuer das Etsy-Zahlungskonto (gezahlt inkl. VAT, davon VAT).
 - **Erneut ausfuehren** (z.B. nach einem Mail- oder PDF-Fehler) erzeugt keine neue Rechnung: Der Monat liefert dieselbe Rechnung mit derselben Nummer und demselben Inhalt aus dem Snapshot. Monate ohne digitale Verkaeufe erzeugen keine Rechnung und verbrauchen keine Nummer.
 
 Rein digitale Bestellungen bekommen deshalb keine Kundenrechnung mehr (Workflow 04 lehnt sie ab, ohne eine Nummer zu vergeben), gemischte nur ueber die physischen Artikel.
@@ -344,7 +351,7 @@ Dann im Browser `http://localhost:8081/?pgsql=orderdb` oeffnen (waehlt PostgreSQ
 | **Benutzer / Passwort** | Worker-User aus den Bootstrap-Logs; den Admin-User nur fuer Schemaaenderungen |
 | **Datenbank** | DB-Name aus den Bootstrap-Logs (Standard `orderdb`) |
 
-Vorsicht bei Aenderungen von Hand: `invoice_counter` und `orders.invoice_number` bilden den lueckenlosen Nummernkreis der Kundenrechnungen, `etsy_rc_invoices` und `orders.etsy_rc_invoice_number` die Etsy-Rechnungen und die unveraenderlichen Rechnungs-Snapshots. Dort nichts loeschen oder umnummerieren. Lesen ist unproblematisch; Konfigurationswerte besser ueber die Umgebungsvariablen pflegen (Schritt 5), sonst ueberschreibt der naechste Start sie wieder.
+Vorsicht bei Aenderungen von Hand: `invoice_counter` und `orders.invoice_number` bilden den lueckenlosen Nummernkreis der Kundenrechnungen, `etsy_rc_invoice_counter`, `etsy_rc_invoices` und `orders.etsy_rc_invoice_number` den der Etsy-Rechnungen und die unveraenderlichen Rechnungs-Snapshots. Dort nichts loeschen oder umnummerieren. Lesen ist unproblematisch; Konfigurationswerte besser ueber die Umgebungsvariablen pflegen (Schritt 5), sonst ueberschreibt der naechste Start sie wieder.
 
 Lauscht nach dem Start nichts auf `127.0.0.1:8081`: `docker ps -a --filter name=adminer` zeigt, ob der Container laeuft und ob die Freigabe steht (`127.0.0.1:8081->8080/tcp`), `docker logs adminer` den Grund. Steht dort nur `8080/tcp`, haengt der Container an keinem nicht-internen Netz (ein mit `--internal` angelegtes `n8n-backend` gibt keine Ports frei); dafuer ist das zusaetzliche Netz `adminer-access` da, also den Container mit der aktuellen `docker-compose.yml` neu anlegen (`--force-recreate`). Den Befehl im selben Verzeichnis bzw. mit demselben Projektnamen ausfuehren wie den Stack (`docker compose ls` zeigt beides; sonst `-p <projektname>`), sonst legt Compose ein zweites Projekt an und scheitert am schon vergebenen Containernamen `orderdb`.
 

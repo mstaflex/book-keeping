@@ -114,7 +114,7 @@ CREATE TABLE app_config (
 CREATE TABLE etsy_rc_invoices (
     id               SERIAL PRIMARY KEY,
     period           DATE NOT NULL UNIQUE,      -- erster Tag des abgerechneten Monats
-    invoice_number   TEXT NOT NULL UNIQUE,      -- aus invoice_counter (gemeinsamer Nummernkreis)
+    invoice_number   TEXT NOT NULL UNIQUE,      -- aus etsy_rc_invoice_counter (eigener Nummernkreis)
     invoice_date     DATE NOT NULL,
     service_from     DATE NOT NULL,             -- Leistungszeitraum
     service_to       DATE NOT NULL,
@@ -170,3 +170,12 @@ CREATE TABLE invoice_counter (
 INSERT INTO invoice_counter (year, last_nr)
 VALUES (EXTRACT(YEAR FROM NOW())::INTEGER, 0)
 ON CONFLICT (year) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- etsy_rc_invoice_counter  (eigener Nummernkreis der Etsy-Rechnungen,
+--                           Workflow 05; unabhängig von invoice_counter)
+-- ---------------------------------------------------------------------------
+CREATE TABLE etsy_rc_invoice_counter (
+    year    INTEGER PRIMARY KEY,
+    last_nr INTEGER NOT NULL DEFAULT 0
+);
