@@ -55,11 +55,20 @@ services:
       timeout: 5s
       retries: 20
 
-  config:
-    build: ../config-loader
+  migrate:
+    build: ../postgres
+    entrypoint: ["sh", "/usr/local/bin/run_migrations.sh"]
     depends_on:
       orderdb:
         condition: service_healthy
+    volumes:
+      - secrets:/run/secrets:ro
+
+  config:
+    build: ../config-loader
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     env_file: test.env
     volumes:
       - secrets:/run/secrets:ro

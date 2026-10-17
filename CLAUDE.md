@@ -124,7 +124,16 @@ does not receive mail; it only links commits to the GitHub profile.
 - **typst-api** rejects unknown request fields (`extra="forbid"`); keep that,
   so an outdated image fails loudly instead of rendering incomplete invoices.
 
-## 9. Workflow versions
+## 9. Migrations
+
+Schema changes go into a new numbered file in `postgres/migrations/` (and into
+`01_schema.sql` for fresh installs). The `migrate` service runs **all**
+migrations on every deploy, so each one must be idempotent (`IF NOT EXISTS`,
+guarded `DO` blocks, `CREATE OR REPLACE`) and wrapped in `BEGIN … COMMIT`. A
+migration never inserts instance-specific data (counter start values, config
+values) and never rewrites issued invoice numbers.
+
+## 10. Workflow versions
 
 Every workflow name ends with its version (`01 · Etsy Orders Sync · v1`). Any
 change to a file in `n8n/workflows/` bumps that workflow's number by one, in
@@ -132,7 +141,7 @@ the JSON name and in the *Version* column of the README table (step 6), in the
 same commit. Keep the `NN · ` prefix unchanged; the test setup and the update
 procedure rely on it. Workflow JSONs carry no `meta` block.
 
-## 10. Local test stack
+## 11. Local test stack
 
 - `test/docker-compose.yml` runs the real components plus an Etsy mock and
   Mailpit (docs/testen.md). After changing workflows, templates, schema or the

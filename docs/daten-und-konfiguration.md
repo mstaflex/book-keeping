@@ -36,9 +36,13 @@ holt allein nichts nach; dafuer die Startpunkte zuruecksetzen (README:
    befuellt, ueberspringt es alles und beendet sich. `DB_*`-Variablen wirken
    deshalb nur beim allerersten Start.
 2. **`postgres`** (Container `orderdb`) startet. Bei leerem Volume legt das
-   Image die Datenbank an und fuehrt `01_schema.sql` und `02_worker_user.sh`
-   aus.
-3. **`config`** (Container `app-config`):
+   Image die Datenbank an und fuehrt `01_schema.sql`, `02_worker_user.sh` und
+   alle Migrationen aus.
+3. **`migrate`** spielt bei jedem Start alle Migrationen aus
+   `postgres/migrations/` ein (idempotent) und beendet sich. Erst danach
+   startet `config`; schlaegt eine Migration fehl, bleibt es dabei und
+   `docker compose logs migrate` nennt den Grund.
+4. **`config`** (Container `app-config`):
    1. wartet, bis die Datenbank TCP-Verbindungen annimmt (`pg_isready`);
    2. prueft, dass die Tabelle `app_config` existiert, sonst Abbruch mit
       Hinweis auf die Migrationen;
@@ -50,7 +54,7 @@ holt allein nichts nach; dafuer die Startpunkte zuruecksetzen (README:
       Werte selbst werden nie geloggt;
    5. bleibt im Leerlauf. Wegen `restart: unless-stopped` startet Docker ihn
       nach einem Server-Neustart wieder, und er schreibt die Werte erneut.
-4. **`typst-api`** startet unabhaengig davon.
+5. **`typst-api`** startet unabhaengig davon.
 
 ## Verhalten in typischen Situationen
 

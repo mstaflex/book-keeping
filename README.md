@@ -380,7 +380,7 @@ Nach einem `git pull` auf dem Server:
    docker exec typst-api curl -s localhost:8080/health   # templates_sha zeigt den laufenden Template-Stand
    ```
 
-3. **Datenbank-Migrationen anwenden** – `postgres/01_schema.sql` laeuft nur beim allerersten Start mit leerem Volume (zusammen mit allen Migrationen). Schemaaenderungen fuer bestehende Datenbanken liegen in `postgres/migrations/` und sind idempotent (mehrfaches Ausfuehren schadet nicht):
+3. **Datenbank-Migrationen** laufen automatisch: Bei jedem `docker compose up` (auch beim Redeploy im Panel) spielt der Kurzzeit-Container `migrate` alle Dateien aus `postgres/migrations/` ein, bevor der Config-Loader startet. Die Migrationen sind idempotent, schon angewendete aendern nichts. Kontrolle: `docker compose logs migrate` endet mit „alle Migrationen angewendet“. Schlaegt eine fehl, nennt das Log die Ursache und der Config-Loader startet nicht. Von Hand (z.B. ohne Redeploy) geht es so:
 
    ```bash
    for f in postgres/migrations/*.sql; do

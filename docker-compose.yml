@@ -57,14 +57,33 @@ services:
   # an (Container wird neu erstellt), NICHT mit "docker compose restart".
   # Namensschema und Details: config-loader/apply-config.sh, README Schritt 5.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Migrationen – spielt bei jedem "docker compose up" (Redeploy) alle
+  # Migrationen aus postgres/migrations/ ein und beendet sich. Sie sind
+  # idempotent; schon angewendete ändern nichts. Schlägt eine fehl, startet
+  # der Config-Loader nicht und das Log nennt die Ursache:
+  #   docker compose logs migrate
+  # ---------------------------------------------------------------------------
+  migrate:
+    build: ./postgres
+    restart: "no"
+    entrypoint: ["sh", "/usr/local/bin/run_migrations.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - secrets_data:/run/secrets:ro
+    networks:
+      - n8n-backend
+
   config:
     build: ./config-loader
     restart: unless-stopped
     container_name: app-config
     init: true
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - secrets_data:/run/secrets:ro
     environment:
