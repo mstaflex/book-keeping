@@ -1,5 +1,5 @@
 {
-  "name": "04 · PDF generieren (Rechnung + Lieferschein) · v1",
+  "name": "04 · PDF generieren (Rechnung + Lieferschein) · v2",
   "nodes": [
     {
       "parameters": {
@@ -18,7 +18,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Vergibt die nächste Rechnungsnummer, falls die Bestellung noch keine hat.\n-- FOR UPDATE sperrt die Bestellzeile: ein paralleler Aufruf für dieselbe\n-- Bestellung wartet und sieht danach die vergebene Nummer, statt den\n-- Zähler ein zweites Mal hochzuzählen (Lücke im Nummernkreis).\n-- Order-ID kommt als Query-Parameter $1, nie per String-Einbau ins SQL.\nWITH target AS (\n  SELECT order_id FROM orders\n  WHERE order_id = $1\n    AND (invoice_number IS NULL OR invoice_number = '')\n    -- Rein digitale Bestellungen bekommen keine Kundenrechnung (→ Workflow 05)\n    AND EXISTS (SELECT 1 FROM jsonb_array_elements(items_json) i\n                WHERE NOT COALESCE((i->>'is_digital')::boolean, false))\n  FOR UPDATE\n), bumped AS (\n  INSERT INTO invoice_counter (year, last_nr)\n  SELECT EXTRACT(YEAR FROM NOW() AT TIME ZONE 'Europe/Berlin')::INTEGER, 1\n  FROM target\n  ON CONFLICT (year) DO UPDATE SET last_nr = invoice_counter.last_nr + 1\n  RETURNING year::TEXT || '-' || LPAD(last_nr::TEXT, 4, '0') AS new_invoice_number\n)\nUPDATE orders\nSET invoice_number = bumped.new_invoice_number\nFROM bumped\nWHERE orders.order_id = $1;",
+        "query": "-- Vergibt die nächste Rechnungsnummer, falls die Bestellung noch keine hat.\n-- Format aus invoice.number_format (INVOICE_NUMBER_FORMAT), Standard\n-- BC-E-{YYYY}-{NNN}: Jahr und laufender Zähler des Jahres (invoice_counter),\n-- so viele Stellen wie N. Der Zähler beginnt jedes Jahr bei 1.\n-- FOR UPDATE sperrt die Bestellzeile: ein paralleler Aufruf für dieselbe\n-- Bestellung wartet und sieht danach die vergebene Nummer, statt den\n-- Zähler ein zweites Mal hochzuzählen (Lücke im Nummernkreis).\n-- Order-ID kommt als Query-Parameter $1, nie per String-Einbau ins SQL.\nDO $$\nDECLARE\n  fmt TEXT := COALESCE((SELECT value FROM app_config WHERE scope = 'invoice' AND key = 'number_format'),\n                       'BC-E-{YYYY}-{NNN}');\nBEGIN\n  IF fmt !~ '\\{YYYY\\}' OR fmt !~ '\\{N+\\}' THEN\n    RAISE EXCEPTION 'invoice.number_format ''%'' muss {YYYY} und {NNN} enthalten (INVOICE_NUMBER_FORMAT)', fmt;\n  END IF;\nEND $$;\n\nWITH fmt AS (\n  SELECT f, substring(f FROM '\\{N+\\}') AS counter_token\n  FROM (SELECT COALESCE((SELECT value FROM app_config WHERE scope = 'invoice' AND key = 'number_format'),\n                        'BC-E-{YYYY}-{NNN}') AS f) x\n), target AS (\n  SELECT order_id FROM orders\n  WHERE order_id = $1\n    AND (invoice_number IS NULL OR invoice_number = '')\n    -- Rein digitale Bestellungen bekommen keine Kundenrechnung (→ Workflow 05)\n    AND EXISTS (SELECT 1 FROM jsonb_array_elements(items_json) i\n                WHERE NOT COALESCE((i->>'is_digital')::boolean, false))\n  FOR UPDATE\n), bumped AS (\n  INSERT INTO invoice_counter (year, last_nr)\n  SELECT EXTRACT(YEAR FROM NOW() AT TIME ZONE 'Europe/Berlin')::INTEGER, 1\n  FROM target\n  ON CONFLICT (year) DO UPDATE SET last_nr = invoice_counter.last_nr + 1\n  RETURNING year, last_nr\n)\nUPDATE orders\nSET invoice_number = replace(replace(fmt.f, '{YYYY}', bumped.year::TEXT),\n                             fmt.counter_token,\n                             lpad(bumped.last_nr::TEXT,\n                                  GREATEST(length(fmt.counter_token) - 2, length(bumped.last_nr::TEXT)), '0'))\nFROM bumped, fmt\nWHERE orders.order_id = $1;",
         "options": { "queryReplacement": "={{ [$json.order_id] }}" }
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000008",
@@ -26,7 +26,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [680, 300],
-      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } }
+      "credentials": { "postgres": { "id": "POSTGRES_CREDENTIAL_ID", "name": "orderdb" } },
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -267,7 +268,7 @@
         "operation": "completion",
         "respondWith": "text",
         "completionTitle": "Nicht möglich",
-        "completionMessage": "={{ String($json.error?.message ?? $json.error ?? 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}",
+        "completionMessage": "={{ String((typeof $json.error === 'string' ? $json.error : $json.error?.message) || $json.message || 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}",
         "options": {}
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000031",
@@ -279,7 +280,7 @@
     },
     {
       "parameters": {
-        "errorMessage": "={{ String($json.error?.message ?? $json.error ?? 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}"
+        "errorMessage": "={{ String((typeof $json.error === 'string' ? $json.error : $json.error?.message) || $json.message || 'Unbekannter Fehler').replace(/ \\[line \\d+\\]$/, '') }}"
       },
       "id": "d4e5f6a7-0004-0004-0004-000000000032",
       "name": "Fehler weitergeben",
@@ -293,7 +294,10 @@
       "main": [[{ "node": "Bestellnummer übernehmen", "type": "main", "index": 0 }]]
     },
     "Rechnungsnummer zuweisen": {
-      "main": [[{ "node": "Order aus DB holen", "type": "main", "index": 0 }]]
+      "main": [
+        [{ "node": "Order aus DB holen", "type": "main", "index": 0 }],
+        [{ "node": "Fehler im Formular?", "type": "main", "index": 0 }]
+      ]
     },
     "Order aus DB holen": {
       "main": [[{ "node": "Request-Bodies aufbauen", "type": "main", "index": 0 }]]

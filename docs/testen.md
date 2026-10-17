@@ -84,6 +84,7 @@ verweisen wie bei Etsy auf die Zahlung; Workflow 02 holt die Bestellnummer
 3. **Rechnung und Lieferschein:** http://localhost:5678/form/rechnung öffnen
    und nacheinander 1001, 1003, 1004, 2003 eintragen. Jede Seite bietet beide
    PDFs zum Download an, Mailpit zeigt je eine Mail mit zwei Anhängen.
+   - Die Nummern lauten `BC-E-<Jahr>-001`, `-002` … (`INVOICE_NUMBER_FORMAT`).
    - 1001 ein zweites Mal: dieselbe Rechnungsnummer, keine neue Rechnung.
    - 1002: „Nicht möglich … enthält nur digitale Artikel“.
    - eine Fantasienummer: „… nicht in der Datenbank gefunden“.

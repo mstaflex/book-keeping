@@ -146,6 +146,7 @@ Die Workflows lesen alle instanzspezifischen Werte (Etsy-API-Key, IDs, Verkaeufe
 | `SELLER_KLEINUNTERNEHMER` | `seller.kleinunternehmer` | `true` (Standard, §19 UStG) oder `false` |
 | `ETSY_RC_RECIPIENT_NAME`, `_STREET`, `_ZIP`, `_CITY`, `_COUNTRY`, `_VAT_ID` | `etsy_rc.recipient_*` | Empfaenger der Reverse-Charge-Rechnung (Workflow 05), `_ZIP` optional |
 | `ETSY_RC_START_DATE` | `etsy_rc.start_date` | erster Tag, ab dem Workflow 05 abrechnet (`YYYY-MM-DD`) |
+| `INVOICE_NUMBER_FORMAT` | `invoice.number_format` | optional: Muster der Kundenrechnungsnummer (Workflow 04), `{YYYY}` = Jahr, `{NNN}` = laufender Zaehler des Jahres mit so vielen Stellen wie `N`; Standard `BC-E-{YYYY}-{NNN}` (z.B. `BC-E-2026-004`) |
 | `ETSY_RC_NUMBER_FORMAT` | `etsy_rc.number_format` | optional: Muster der Rechnungsnummer, `{YYYY}` und `{MM}` = abgerechneter Monat; Standard `RE-E-{YYYY}-{MM}` (z.B. `RE-E-2026-09`) |
 | `ETSY_RC_PAYMENT_NOTE`, `ETSY_RC_NOTE` | `etsy_rc.payment_note`, `etsy_rc.note` | optionale Texte auf der Etsy-Rechnung |
 | `LEXOFFICE_START_MONTH` | `lexoffice.start_month` | erster Monat, den Workflow 06 nach Lexoffice exportiert (`YYYY-MM`) |
@@ -170,7 +171,7 @@ Die JSON-Dateien aus `n8n/workflows/` in n8n importieren:
 | `01_etsy_orders_sync.json` | v1 | Synchronisiert Etsy-Bestellungen alle 15 Minuten |
 | `02_etsy_transactions_sync.json` | v1 | Synchronisiert Etsy-Transaktionen (Gebuehren, Auszahlungen) alle 6 Stunden |
 | `03_notion_sync.json` | v1 | Synchronisiert Bestellungen nach Notion |
-| `04_generate_invoice_pdf.json` | v1 | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel), per Formular |
+| `04_generate_invoice_pdf.json` | v2 | Erzeugt Rechnungen und Lieferscheine als PDF (nur physische Artikel), per Formular |
 | `05_etsy_reverse_charge_invoice.json` | v2 | Monatliche Reverse-Charge-Rechnung an Etsy ueber die digitalen Verkaeufe |
 | `06_etsy_lexoffice_export.json` | v1 | Monats-CSV des Etsy-Zahlungskontos fuer Lexoffice (ersetzt PayJoe) |
 
@@ -185,6 +186,14 @@ Nach dem Import in jeder Node das passende Credential aus Schritt 3 auswaehlen (
 Workflow 04 hat ein n8n-Formular: im Browser `<n8n-adresse>/form/rechnung` oeffnen, die Etsy-Bestellnummer eintragen, **Erzeugen**. Danach stehen Rechnung und Lieferschein auf der Seite zum Download bereit (zum Ausdrucken beim Packen) und gehen zusaetzlich per Mail an `mail.to`.
 
 - Derselbe Aufruf fuer dieselbe Bestellung liefert dieselbe Rechnungsnummer, es entsteht keine zweite Rechnung.
+- Die Nummer folgt `INVOICE_NUMBER_FORMAT` (Standard `BC-E-{YYYY}-{NNN}`), der Zaehler (`invoice_counter`) beginnt jedes Jahr bei 1. Wurden in diesem Jahr schon Rechnungen von Hand geschrieben, den Zaehler einmalig auf die letzte vergebene Nummer setzen, z.B. nach `BC-E-2026-003` (Adminer oder psql):
+
+  ```sql
+  INSERT INTO invoice_counter (year, last_nr) VALUES (2026, 3)
+  ON CONFLICT (year) DO UPDATE SET last_nr = GREATEST(invoice_counter.last_nr, EXCLUDED.last_nr);
+  ```
+
+  `GREATEST` verhindert, dass der Zaehler versehentlich zurueckgesetzt wird und Nummern doppelt vergeben werden.
 - Bestellungen nur mit digitalen Artikeln, unbekannte Bestellnummern oder fehlende Verkaeuferdaten lehnt das Formular mit einer Meldung ab, ohne eine Nummer zu vergeben.
 - Fuer Skripte gibt es weiterhin den Webhook `POST /webhook/generate-docs` mit Body `{"order_id": "..."}`; er antwortet mit `{"status": "ok", "order_id": "...", "invoice_number": "..."}`.
 

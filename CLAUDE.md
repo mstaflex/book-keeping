@@ -34,7 +34,7 @@ of the deployment" instead of naming the provider).
 
 When adding a feature that needs a new instance-specific value: add the
 variable to the `config` service in `docker-compose.yml` (prefix `ETSY_`,
-`ETSY_RC_`, `NOTION_`, `MAIL_`, `SELLER_` or `LEXOFFICE_`; a new scope needs a new prefix in
+`ETSY_RC_`, `NOTION_`, `MAIL_`, `SELLER_`, `LEXOFFICE_` or `INVOICE_`; a new scope needs a new prefix in
 `config-loader/apply-config.sh`), document it in README step 5 and in
 `.env.example` (placeholder value only), read it from `app_config` in the
 workflow and fail with a clear error if it is missing. Do not hard-code it in a

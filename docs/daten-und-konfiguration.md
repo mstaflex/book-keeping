@@ -81,6 +81,7 @@ holt allein nichts nach; dafuer die Startpunkte zuruecksetzen (README:
 | `MAIL_` | `mail` | `MAIL_FROM` → `mail.from` |
 | `SELLER_` | `seller` | `SELLER_VAT_ID` → `seller.vat_id` |
 | `LEXOFFICE_` | `lexoffice` | `LEXOFFICE_START_MONTH` → `lexoffice.start_month` |
+| `INVOICE_` | `invoice` | `INVOICE_NUMBER_FORMAT` → `invoice.number_format` |
 
 Im Container kommen nur Variablen an, die in `docker-compose.yml` beim Service
 `config` aufgefuehrt sind. Eine Variable, die nur im Panel oder in der `.env`

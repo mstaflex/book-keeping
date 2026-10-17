@@ -47,7 +47,7 @@ fi
 set --
 sql=""
 n=0
-for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER|LEXOFFICE)_[A-Z0-9_]+=' | tr -d '=' | sort -u); do
+for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER|LEXOFFICE|INVOICE)_[A-Z0-9_]+=' | tr -d '=' | sort -u); do
   value="$(printenv "$name" || true)"
   [ -n "$value" ] || continue
   # Datumswerte prüfen: ein Tippfehler würde sonst erst im Workflow als
@@ -67,6 +67,7 @@ for name in $(env | grep -E -o '^(ETSY_RC|ETSY|NOTION|MAIL|SELLER|LEXOFFICE)_[A-
     MAIL_*)    scope=mail;    key=${name#MAIL_} ;;
     SELLER_*)  scope=seller;  key=${name#SELLER_} ;;
     LEXOFFICE_*) scope=lexoffice; key=${name#LEXOFFICE_} ;;
+    INVOICE_*)   scope=invoice;   key=${name#INVOICE_} ;;
   esac
   key=$(printf '%s' "$key" | tr 'A-Z' 'a-z')
   n=$((n + 1))
