@@ -35,13 +35,18 @@ async function waitReady() {
 
 async function login() {
   const r = await api('POST', '/rest/login', { emailOrLdapLoginId: LOGIN.email, password: LOGIN.password });
-  if (r.status !== 200) throw new Error(`Login fehlgeschlagen (${r.status}): ${JSON.stringify(r.data).slice(0, 200)}`);
+  if (r.status !== 200) {
+    throw new Error(`Login mit ${LOGIN.email} fehlgeschlagen (${r.status}). Wurde n8n vorher von Hand `
+      + 'registriert? Dann die Testumgebung neu anlegen: docker compose -f test/docker-compose.yml down -v, '
+      + 'danach up -d --build und warten, bis "docker compose -f test/docker-compose.yml logs n8n-setup" '
+      + '"importiert" zeigt. Erst dann n8n öffnen und mit dem Test-Login anmelden, nicht registrieren.');
+  }
 }
 
 async function owner() {
   await waitReady();
   const r = await api('POST', '/rest/owner/setup', { ...LOGIN, firstName: 'Test', lastName: 'Buchhaltung' });
-  console.log(r.status === 200 ? `Login angelegt: ${LOGIN.email}` : 'Login existiert bereits');
+  console.log(r.status === 200 ? `Login angelegt: ${LOGIN.email}` : 'Login existiert bereits, melde mich an');
   await login();
 }
 

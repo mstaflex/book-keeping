@@ -32,8 +32,13 @@ Im Repository-Root:
 
 ```bash
 docker compose -f test/docker-compose.yml up -d --build
-docker compose -f test/docker-compose.yml logs -f n8n-setup     # bis "importiert und aktiviert"
+docker compose -f test/docker-compose.yml logs -f n8n-setup     # bis "06_…: importiert und aktiviert"
 ```
+
+Erst danach n8n öffnen und mit dem Test-Login **anmelden**. Zeigt n8n stattdessen
+die Registrierung („Set up owner account“), ist die Einrichtung noch nicht
+gelaufen: nicht registrieren, sondern warten bzw. unter „Fehlersuche“ nachsehen.
+Der erste Start dauert einige Minuten (Images bauen, Datenbank anlegen).
 
 | | Adresse | Zugang |
 |---|---|---|
@@ -144,6 +149,7 @@ Beenden ohne Daten zu löschen: `docker compose -f test/docker-compose.yml down`
 | `service "bootstrap" didn't complete successfully: exit 2`, im Log `set: illegal option -` | Die Skripte haben Windows-Zeilenenden (CRLF), weil Git sie unter Windows so auscheckt. Seit `.gitattributes` im Repo liegt und die Images CR-Zeichen entfernen, passiert das nicht mehr. Nach dem Update einmal sauber neu starten: `docker compose -f test/docker-compose.yml down -v`, dann `up -d --build`. |
 | `test/report.sh` meldet `$'\r': command not found` | Die Arbeitskopie hat noch CRLF von einem älteren Checkout. Neu auschecken: `git rm -rq --cached . && git reset -q --hard` (verwirft lokale Änderungen an versionierten Dateien). Unter Windows `test/report.sh` in Git Bash oder WSL ausführen. |
 | Adminer meldet `Connection refused` | Als Datenbank System ist MySQL gewählt (Voreinstellung von Adminer). Auf **PostgreSQL** umstellen oder den Link aus der Tabelle oben nutzen, der PostgreSQL vorauswählt. |
+| n8n zeigt die Registrierung, es gibt keine Workflows und Credentials | `n8n-setup` ist nicht oder noch nicht gelaufen. `docker compose -f test/docker-compose.yml ps -a` zeigt seinen Status, `… logs n8n-setup` den Grund. Wurde n8n schon von Hand registriert, kann sich das Setup nicht mehr anmelden: `docker compose -f test/docker-compose.yml down -v`, dann `up -d --build`, warten bis das Setup-Log „importiert“ zeigt, dann mit `test@example.org` anmelden. |
 | `port is already allocated` | 5678, 8025 oder 8081 sind belegt, z.B. durch eine andere n8n-Instanz. Diese stoppen oder den linken Teil der Port-Angabe in `test/docker-compose.yml` ändern. |
 | Ein Container fehlt oder ist beendet | `docker compose -f test/docker-compose.yml ps -a` zeigt den Status, `docker compose -f test/docker-compose.yml logs <service>` den Grund. |
 

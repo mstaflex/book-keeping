@@ -99,8 +99,11 @@ services:
     ports:
       - "127.0.0.1:5678:5678"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz/readiness || exit 1"]
+      # 127.0.0.1 statt localhost: localhost kann auf IPv6 (::1) zeigen, n8n
+      # lauscht hier nur auf IPv4. Der erste Start (Datenbank anlegen) kann dauern.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz/readiness || exit 1"]
       interval: 5s
+      start_period: 300s
       retries: 60
 
   # Einmalig: Login, Credentials und Workflows anlegen. Nach Änderungen an den
